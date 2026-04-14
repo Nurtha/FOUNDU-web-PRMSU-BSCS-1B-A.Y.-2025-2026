@@ -437,6 +437,17 @@ table tr:last-child td {
   background: linear-gradient(135deg, #1f77ff, #5cc8ff);
 }
 
+.action-btn.note {
+  background: linear-gradient(135deg, #5e5ce6, #0a84ff);
+}
+
+.claim-student-id-cell {
+  min-width: 140px;
+  font-family: 'Sora', 'DM Sans', sans-serif;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+}
+
 .status {
   display: inline-block;
   padding: 5px 10px;
@@ -459,6 +470,60 @@ table tr:last-child td {
 
 .action-btn.claimed {
   background: linear-gradient(135deg, #ffb648, #ff9500);
+}
+
+.samaritan-form {
+  margin-top: 12px;
+  padding: 14px;
+  border-radius: var(--ios-radius-lg);
+  background: rgba(255, 255, 255, 0.76);
+  border: 1px solid var(--ios-border);
+  box-shadow: var(--ios-shadow);
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.inline-field {
+  display: grid;
+  gap: 6px;
+}
+
+.inline-field label {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #486087;
+}
+
+.inline-field input,
+.inline-field textarea {
+  width: 100%;
+  border: 1px solid #cbd5e1;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.95);
+  padding: 10px 12px;
+  font-size: 14px;
+  color: #1f2937;
+  font-family: inherit;
+}
+
+.inline-field input:focus,
+.inline-field textarea:focus {
+  outline: none;
+  border-color: #60a5fa;
+  box-shadow: 0 0 0 3px rgba(31, 119, 255, 0.16);
+}
+
+.inline-field-wide {
+  grid-column: 1 / -1;
+}
+
+.samaritans-toolbar {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: flex-end;
 }
 
 @keyframes reveal {
@@ -548,7 +613,7 @@ table tr:last-child td {
   .tabs {
     width: 100%;
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     border-radius: 16px;
     padding: 6px;
   }
@@ -579,6 +644,18 @@ table tr:last-child td {
 
   table {
     min-width: 760px;
+  }
+
+  .samaritan-form {
+    grid-template-columns: 1fr;
+  }
+
+  .samaritans-toolbar {
+    justify-content: stretch;
+  }
+
+  .samaritans-toolbar .action-btn {
+    width: 100%;
   }
 }
 

@@ -563,6 +563,11 @@ const db = new sqlite3.Database('./foundu.db', (err) => {
       status TEXT NOT NULL DEFAULT 'pending',
       claimant_name TEXT NOT NULL DEFAULT '',
       claimant_student_id TEXT NOT NULL DEFAULT '',
+      item_type TEXT,
+      item_cat TEXT,
+      item_title TEXT,
+      item_loc TEXT,
+      item_date TEXT,
       cert_name TEXT,
       requested_at TEXT DEFAULT CURRENT_TIMESTAMP,
       issued_at TEXT,
@@ -586,6 +591,11 @@ const db = new sqlite3.Database('./foundu.db', (err) => {
           const hasClaimMessage = claimColumns.some((column) => column.name === 'claim_message');
           const hasAdminNote = claimColumns.some((column) => column.name === 'admin_note');
           const hasReviewedAt = claimColumns.some((column) => column.name === 'reviewed_at');
+          const hasItemType = claimColumns.some((column) => column.name === 'item_type');
+          const hasItemCat = claimColumns.some((column) => column.name === 'item_cat');
+          const hasItemTitle = claimColumns.some((column) => column.name === 'item_title');
+          const hasItemLoc = claimColumns.some((column) => column.name === 'item_loc');
+          const hasItemDate = claimColumns.some((column) => column.name === 'item_date');
 
           if (!hasClaimantName) {
             db.run("ALTER TABLE claim_requests ADD COLUMN claimant_name TEXT NOT NULL DEFAULT ''", (alterNameErr) => {
@@ -634,8 +644,92 @@ const db = new sqlite3.Database('./foundu.db', (err) => {
               }
             });
           }
+
+          if (!hasItemType) {
+            db.run("ALTER TABLE claim_requests ADD COLUMN item_type TEXT", (alterErr) => {
+              if (alterErr) {
+                console.error('[db] Failed to add item_type column:', alterErr.message);
+              }
+            });
+          }
+
+          if (!hasItemCat) {
+            db.run("ALTER TABLE claim_requests ADD COLUMN item_cat TEXT", (alterErr) => {
+              if (alterErr) {
+                console.error('[db] Failed to add item_cat column:', alterErr.message);
+              }
+            });
+          }
+
+          if (!hasItemTitle) {
+            db.run("ALTER TABLE claim_requests ADD COLUMN item_title TEXT", (alterErr) => {
+              if (alterErr) {
+                console.error('[db] Failed to add item_title column:', alterErr.message);
+              }
+            });
+          }
+
+          if (!hasItemLoc) {
+            db.run("ALTER TABLE claim_requests ADD COLUMN item_loc TEXT", (alterErr) => {
+              if (alterErr) {
+                console.error('[db] Failed to add item_loc column:', alterErr.message);
+              }
+            });
+          }
+
+          if (!hasItemDate) {
+            db.run("ALTER TABLE claim_requests ADD COLUMN item_date TEXT", (alterErr) => {
+              if (alterErr) {
+                console.error('[db] Failed to add item_date column:', alterErr.message);
+              }
+            });
+          }
         });
       }
+    }
+  );
+
+  db.run(
+    `CREATE TABLE IF NOT EXISTS good_samaritan_entries (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      finder_name TEXT NOT NULL,
+      total_returns INTEGER NOT NULL DEFAULT 1,
+      last_return_date TEXT,
+      note TEXT,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )`,
+    (samaritanTableErr) => {
+      if (samaritanTableErr) {
+        console.error('[db] Failed to initialize good_samaritan_entries table:', samaritanTableErr.message);
+        return;
+      }
+
+      db.all('PRAGMA table_info(good_samaritan_entries)', [], (pragmaErr, columns) => {
+        if (pragmaErr) {
+          console.error('[db] Failed to read good_samaritan_entries schema:', pragmaErr.message);
+          return;
+        }
+
+        const hasNote = columns.some((column) => column.name === 'note');
+        const hasUpdatedAt = columns.some((column) => column.name === 'updated_at');
+
+        if (!hasNote) {
+          db.run('ALTER TABLE good_samaritan_entries ADD COLUMN note TEXT', (alterErr) => {
+            if (alterErr) {
+              console.error('[db] Failed to add note column to good_samaritan_entries:', alterErr.message);
+            }
+          });
+        }
+
+        if (!hasUpdatedAt) {
+          db.run('ALTER TABLE good_samaritan_entries ADD COLUMN updated_at TEXT DEFAULT CURRENT_TIMESTAMP', (alterErr) => {
+            if (alterErr) {
+              console.error('[db] Failed to add updated_at column to good_samaritan_entries:', alterErr.message);
+            }
+          });
+        }
+      });
     }
   );
 
@@ -814,13 +908,13 @@ app.get('/api/admin/claims', (req, res) => {
       cr.requested_at,
       cr.reviewed_at,
       cr.issued_at,
-      i.type,
-      i.cat,
-      i.title,
-      i.loc,
-      i.date
+      COALESCE(i.type, cr.item_type) AS type,
+      COALESCE(i.cat, cr.item_cat) AS cat,
+      COALESCE(i.title, cr.item_title) AS title,
+      COALESCE(i.loc, cr.item_loc) AS loc,
+      COALESCE(i.date, cr.item_date) AS date
     FROM claim_requests cr
-    JOIN items i ON i.id = cr.item_id
+    LEFT JOIN items i ON i.id = cr.item_id
     ORDER BY
       CASE WHEN cr.status = 'pending' THEN 0 ELSE 1 END,
       cr.id DESC
@@ -833,6 +927,420 @@ app.get('/api/admin/claims', (req, res) => {
     }
 
     res.json({ data: rows });
+  });
+});
+
+app.get('/api/admin/good-samaritans', (req, res) => {
+  const sql = `
+    WITH auto_rows AS (
+      SELECT
+        'certificate' AS source_type,
+        COALESCE(NULLIF(TRIM(cr.cert_name), ''), NULLIF(TRIM(cr.claimant_name), ''), 'Anonymous Finder') AS finder_name,
+        COUNT(DISTINCT cr.item_id) AS total_returns,
+        MAX(cr.issued_at) AS last_return_date,
+        NULL AS note,
+        MAX(cr.issued_at) AS updated_at,
+        NULL AS created_at,
+        'certgrp:' || CAST(MIN(cr.id) AS TEXT) AS source_key
+      FROM claim_requests cr
+      WHERE
+        LOWER(COALESCE(cr.item_type, '')) = 'found'
+        AND cr.status = 'certificate_issued'
+        AND cr.issued_at IS NOT NULL
+      GROUP BY COALESCE(NULLIF(TRIM(cr.cert_name), ''), NULLIF(TRIM(cr.claimant_name), ''), 'Anonymous Finder')
+    ),
+    manual_rows AS (
+      SELECT
+        'manual' AS source_type,
+        COALESCE(NULLIF(TRIM(g.finder_name), ''), 'Anonymous Finder') AS finder_name,
+        CASE WHEN g.total_returns > 0 THEN g.total_returns ELSE 1 END AS total_returns,
+        COALESCE(NULLIF(g.last_return_date, ''), g.updated_at, g.created_at) AS last_return_date,
+        g.note AS note,
+        g.updated_at AS updated_at,
+        g.created_at AS created_at,
+        'manual:' || g.id AS source_key
+      FROM good_samaritan_entries g
+    )
+    SELECT *
+    FROM auto_rows
+    UNION ALL
+    SELECT *
+    FROM manual_rows
+    ORDER BY total_returns DESC, last_return_date DESC, finder_name ASC
+  `;
+
+  db.all(sql, [], (err, rows) => {
+    if (err) {
+      if ((err.message || '').includes('no such table: good_samaritan_entries')) {
+        return res.json({ data: [] });
+      }
+
+      console.error('[api] Failed to fetch admin good samaritans:', err.message);
+      return res.status(500).json({ error: 'Failed to fetch good samaritan entries' });
+    }
+
+    res.json({ data: rows || [] });
+  });
+});
+
+app.patch('/api/admin/good-samaritans/:sourceType/:sourceKey', writeLimiter, requireCsrf, (req, res) => {
+  const sourceType = (req.params.sourceType || '').toString().trim().toLowerCase();
+  const sourceKey = (req.params.sourceKey || '').toString().trim();
+  const finderName = sanitizeText(req.body.finderName, maxTextLength.name);
+  const totalReturns = Number(req.body.totalReturns);
+  const lastReturnDate = sanitizeText(req.body.lastReturnDate, 20);
+  const note = sanitizeText(req.body.note, maxTextLength.adminNote);
+
+  if (!finderName) {
+    return res.status(400).json({ error: 'Finder name is required' });
+  }
+
+  if (!Number.isInteger(totalReturns) || totalReturns <= 0 || totalReturns > 999) {
+    return res.status(400).json({ error: 'Returned items must be an integer between 1 and 999' });
+  }
+
+  if (lastReturnDate && !isValidIsoDate(lastReturnDate)) {
+    return res.status(400).json({ error: 'Last return date must use YYYY-MM-DD format' });
+  }
+
+  if (sourceType === 'manual') {
+    const entryId = Number(sourceKey.replace(/^manual:/i, ''));
+    if (!isPositiveInteger(entryId)) {
+      return res.status(400).json({ error: 'Invalid manual entry id' });
+    }
+
+    const sql = `
+      UPDATE good_samaritan_entries
+      SET finder_name = ?, total_returns = ?, last_return_date = ?, note = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `;
+
+    return db.run(sql, [finderName, totalReturns, lastReturnDate || null, note, entryId], function onUpdate(err) {
+      if (err) {
+        console.error('[api] Failed to update manual good samaritan entry:', err.message);
+        return res.status(500).json({ error: 'Failed to update good samaritan entry' });
+      }
+
+      if (!this.changes) {
+        return res.status(404).json({ error: 'Good samaritan entry not found' });
+      }
+
+      res.json({ message: 'Good samaritan entry updated' });
+    });
+  }
+
+  if (sourceType === 'certificate') {
+    const certificateGroupId = Number(sourceKey.replace(/^certgrp:/i, ''));
+    if (!isPositiveInteger(certificateGroupId)) {
+      return res.status(400).json({ error: 'Invalid certificate source key' });
+    }
+
+    const groupSql = `
+      SELECT LOWER(COALESCE(NULLIF(TRIM(cert_name), ''), NULLIF(TRIM(claimant_name), ''), 'anonymous finder')) AS group_name
+      FROM claim_requests
+      WHERE
+        id = ?
+        AND status = 'certificate_issued'
+        AND LOWER(COALESCE(item_type, '')) = 'found'
+        AND issued_at IS NOT NULL
+      LIMIT 1
+    `;
+
+    return db.get(groupSql, [certificateGroupId], (groupErr, groupRow) => {
+      if (groupErr) {
+        console.error('[api] Failed to resolve certificate group:', groupErr.message);
+        return res.status(500).json({ error: 'Failed to update good samaritan entry' });
+      }
+
+      if (!groupRow || !groupRow.group_name) {
+        return res.status(404).json({ error: 'Good samaritan entry not found' });
+      }
+
+      const groupName = groupRow.group_name;
+      const listSql = `
+        SELECT id
+        FROM claim_requests
+        WHERE
+          status = 'certificate_issued'
+          AND LOWER(COALESCE(item_type, '')) = 'found'
+          AND issued_at IS NOT NULL
+          AND LOWER(COALESCE(NULLIF(TRIM(cert_name), ''), NULLIF(TRIM(claimant_name), ''), 'anonymous finder')) = ?
+        ORDER BY datetime(issued_at) DESC, id DESC
+      `;
+
+      db.all(listSql, [groupName], (listErr, groupClaims) => {
+        if (listErr) {
+          console.error('[api] Failed to load certificate group claims:', listErr.message);
+          return res.status(500).json({ error: 'Failed to update good samaritan entry' });
+        }
+
+        const currentCount = Array.isArray(groupClaims) ? groupClaims.length : 0;
+        if (!currentCount) {
+          return res.status(404).json({ error: 'Good samaritan entry not found' });
+        }
+
+        if (totalReturns > currentCount) {
+          return res.status(400).json({ error: `Returned items cannot exceed issued certificate count (${currentCount}) for system-generated entries` });
+        }
+
+        const demoteIds = groupClaims.slice(totalReturns).map((row) => row.id).filter((id) => isPositiveInteger(id));
+        const normalizedDate = lastReturnDate || null;
+
+        const updateGroupSql = `
+          UPDATE claim_requests
+          SET
+            cert_name = ?,
+            admin_note = ?,
+            reviewed_at = COALESCE(reviewed_at, CURRENT_TIMESTAMP),
+            issued_at = COALESCE(?, issued_at)
+          WHERE
+            status = 'certificate_issued'
+            AND LOWER(COALESCE(item_type, '')) = 'found'
+            AND issued_at IS NOT NULL
+            AND LOWER(COALESCE(NULLIF(TRIM(cert_name), ''), NULLIF(TRIM(claimant_name), ''), 'anonymous finder')) = ?
+        `;
+
+        db.run(updateGroupSql, [finderName, note || null, normalizedDate, groupName], function onGroupUpdate(updateErr) {
+          if (updateErr) {
+            console.error('[api] Failed to update certificate-based good samaritan entry:', updateErr.message);
+            return res.status(500).json({ error: 'Failed to update good samaritan entry' });
+          }
+
+          const finish = () => res.json({ message: 'Good samaritan entry updated' });
+
+          if (!demoteIds.length) {
+            return finish();
+          }
+
+          const placeholders = demoteIds.map(() => '?').join(',');
+          const demoteSql = `
+            UPDATE claim_requests
+            SET
+              status = 'verified',
+              cert_name = NULL,
+              issued_at = NULL,
+              reviewed_at = COALESCE(reviewed_at, CURRENT_TIMESTAMP)
+            WHERE id IN (${placeholders})
+          `;
+
+          db.run(demoteSql, demoteIds, (demoteErr) => {
+            if (demoteErr) {
+              console.error('[api] Failed to reduce certificate-based good samaritan count:', demoteErr.message);
+              return res.status(500).json({ error: 'Failed to update good samaritan entry' });
+            }
+
+            return finish();
+          });
+        });
+      });
+    });
+  }
+
+  return res.status(400).json({ error: 'Invalid entry source type' });
+});
+
+app.delete('/api/admin/good-samaritans/:sourceType/:sourceKey', writeLimiter, requireCsrf, (req, res) => {
+  const sourceType = (req.params.sourceType || '').toString().trim().toLowerCase();
+  const sourceKey = (req.params.sourceKey || '').toString().trim();
+
+  if (sourceType === 'manual') {
+    const entryId = Number(sourceKey.replace(/^manual:/i, ''));
+    if (!isPositiveInteger(entryId)) {
+      return res.status(400).json({ error: 'Invalid manual entry id' });
+    }
+
+    return db.run('DELETE FROM good_samaritan_entries WHERE id = ?', [entryId], function onDelete(err) {
+      if (err) {
+        console.error('[api] Failed to delete good samaritan entry:', err.message);
+        return res.status(500).json({ error: 'Failed to delete good samaritan entry' });
+      }
+
+      if (!this.changes) {
+        return res.status(404).json({ error: 'Good samaritan entry not found' });
+      }
+
+      return res.json({ message: 'Good samaritan entry deleted' });
+    });
+  }
+
+  if (sourceType === 'certificate') {
+    const certificateGroupId = Number(sourceKey.replace(/^certgrp:/i, ''));
+    if (!isPositiveInteger(certificateGroupId)) {
+      return res.status(400).json({ error: 'Invalid certificate source key' });
+    }
+
+    const groupSql = `
+      SELECT LOWER(COALESCE(NULLIF(TRIM(cert_name), ''), NULLIF(TRIM(claimant_name), ''), 'anonymous finder')) AS group_name
+      FROM claim_requests
+      WHERE
+        id = ?
+        AND status = 'certificate_issued'
+        AND LOWER(COALESCE(item_type, '')) = 'found'
+        AND issued_at IS NOT NULL
+      LIMIT 1
+    `;
+
+    return db.get(groupSql, [certificateGroupId], (groupErr, groupRow) => {
+      if (groupErr) {
+        console.error('[api] Failed to resolve certificate group for delete:', groupErr.message);
+        return res.status(500).json({ error: 'Failed to delete good samaritan entry' });
+      }
+
+      if (!groupRow || !groupRow.group_name) {
+        return res.status(404).json({ error: 'Good samaritan entry not found' });
+      }
+
+      const clearSql = `
+        UPDATE claim_requests
+        SET
+          status = 'verified',
+          cert_name = NULL,
+          issued_at = NULL,
+          reviewed_at = COALESCE(reviewed_at, CURRENT_TIMESTAMP)
+        WHERE
+          status = 'certificate_issued'
+          AND LOWER(COALESCE(item_type, '')) = 'found'
+          AND issued_at IS NOT NULL
+          AND LOWER(COALESCE(NULLIF(TRIM(cert_name), ''), NULLIF(TRIM(claimant_name), ''), 'anonymous finder')) = ?
+      `;
+
+      return db.run(clearSql, [groupRow.group_name], function onClear(clearErr) {
+        if (clearErr) {
+          console.error('[api] Failed to delete certificate-based good samaritan entry:', clearErr.message);
+          return res.status(500).json({ error: 'Failed to delete good samaritan entry' });
+        }
+
+        if (!this.changes) {
+          return res.status(404).json({ error: 'Good samaritan entry not found' });
+        }
+
+        return res.json({ message: 'Good samaritan entry deleted' });
+      });
+    });
+  }
+
+  return res.status(400).json({ error: 'Invalid entry source type' });
+});
+
+app.post('/api/admin/good-samaritans', writeLimiter, requireCsrf, (req, res) => {
+  const finderName = sanitizeText(req.body.finderName, maxTextLength.name);
+  const totalReturns = Number(req.body.totalReturns);
+  const lastReturnDate = sanitizeText(req.body.lastReturnDate, 20);
+  const note = sanitizeText(req.body.note, maxTextLength.adminNote);
+
+  if (!finderName) {
+    return res.status(400).json({ error: 'Finder name is required' });
+  }
+
+  if (!Number.isInteger(totalReturns) || totalReturns <= 0 || totalReturns > 999) {
+    return res.status(400).json({ error: 'Returned items must be an integer between 1 and 999' });
+  }
+
+  if (lastReturnDate && !isValidIsoDate(lastReturnDate)) {
+    return res.status(400).json({ error: 'Last return date must use YYYY-MM-DD format' });
+  }
+
+  const sql = `
+    INSERT INTO good_samaritan_entries (finder_name, total_returns, last_return_date, note, updated_at)
+    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+  `;
+
+  db.run(sql, [finderName, totalReturns, lastReturnDate || null, note], function onInsert(err) {
+    if (err) {
+      console.error('[api] Failed to create good samaritan entry:', err.message);
+      return res.status(500).json({ error: 'Failed to create good samaritan entry' });
+    }
+
+    res.status(201).json({
+      data: {
+        id: this.lastID,
+        finder_name: finderName,
+        total_returns: totalReturns,
+        last_return_date: lastReturnDate || null,
+        note
+      }
+    });
+  });
+});
+
+app.patch('/api/admin/good-samaritans/:id', writeLimiter, requireCsrf, (req, res) => {
+  const entryId = Number(req.params.id);
+  if (!isPositiveInteger(entryId)) {
+    return res.status(400).json({ error: 'Invalid entry id' });
+  }
+
+  db.get('SELECT id, finder_name, total_returns, last_return_date, note FROM good_samaritan_entries WHERE id = ?', [entryId], (findErr, row) => {
+    if (findErr) {
+      console.error('[api] Failed to load good samaritan entry:', findErr.message);
+      return res.status(500).json({ error: 'Failed to update good samaritan entry' });
+    }
+
+    if (!row) {
+      return res.status(404).json({ error: 'Good samaritan entry not found' });
+    }
+
+    const incomingName = sanitizeText(req.body.finderName, maxTextLength.name);
+    const hasReturns = req.body.totalReturns !== undefined && req.body.totalReturns !== null && req.body.totalReturns !== '';
+    const incomingReturns = hasReturns ? Number(req.body.totalReturns) : row.total_returns;
+    const incomingDate = req.body.lastReturnDate === undefined
+      ? (row.last_return_date || '')
+      : sanitizeText(req.body.lastReturnDate, 20);
+    const incomingNote = req.body.note === undefined ? (row.note || '') : sanitizeText(req.body.note, maxTextLength.adminNote);
+
+    const finderName = incomingName || row.finder_name;
+    const totalReturns = incomingReturns;
+    const lastReturnDate = incomingDate;
+
+    if (!finderName) {
+      return res.status(400).json({ error: 'Finder name is required' });
+    }
+
+    if (!Number.isInteger(totalReturns) || totalReturns <= 0 || totalReturns > 999) {
+      return res.status(400).json({ error: 'Returned items must be an integer between 1 and 999' });
+    }
+
+    if (lastReturnDate && !isValidIsoDate(lastReturnDate)) {
+      return res.status(400).json({ error: 'Last return date must use YYYY-MM-DD format' });
+    }
+
+    const updateSql = `
+      UPDATE good_samaritan_entries
+      SET finder_name = ?, total_returns = ?, last_return_date = ?, note = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `;
+
+    db.run(updateSql, [finderName, totalReturns, lastReturnDate || null, incomingNote, entryId], function onUpdate(updateErr) {
+      if (updateErr) {
+        console.error('[api] Failed to update good samaritan entry:', updateErr.message);
+        return res.status(500).json({ error: 'Failed to update good samaritan entry' });
+      }
+
+      if (!this.changes) {
+        return res.status(404).json({ error: 'Good samaritan entry not found' });
+      }
+
+      res.json({ message: 'Good samaritan entry updated' });
+    });
+  });
+});
+
+app.delete('/api/admin/good-samaritans/:id', writeLimiter, requireCsrf, (req, res) => {
+  const entryId = Number(req.params.id);
+  if (!isPositiveInteger(entryId)) {
+    return res.status(400).json({ error: 'Invalid entry id' });
+  }
+
+  db.run('DELETE FROM good_samaritan_entries WHERE id = ?', [entryId], function onDelete(err) {
+    if (err) {
+      console.error('[api] Failed to delete good samaritan entry:', err.message);
+      return res.status(500).json({ error: 'Failed to delete good samaritan entry' });
+    }
+
+    if (!this.changes) {
+      return res.status(404).json({ error: 'Good samaritan entry not found' });
+    }
+
+    res.json({ message: 'Good samaritan entry deleted' });
   });
 });
 
@@ -861,23 +1369,71 @@ app.get('/api/claims/status', (req, res) => {
 
 app.get('/api/good-samaritans', (req, res) => {
   const sql = `
+    WITH auto_rows AS (
+      SELECT
+        COALESCE(NULLIF(TRIM(cr.cert_name), ''), NULLIF(TRIM(cr.claimant_name), ''), 'Anonymous Finder') AS finder_name,
+        COUNT(DISTINCT cr.item_id) AS total_returns,
+        MAX(cr.issued_at) AS last_return_date
+      FROM claim_requests cr
+      WHERE
+        LOWER(COALESCE(cr.item_type, '')) = 'found'
+        AND cr.status = 'certificate_issued'
+        AND cr.issued_at IS NOT NULL
+      GROUP BY COALESCE(NULLIF(TRIM(cr.cert_name), ''), NULLIF(TRIM(cr.claimant_name), ''), 'Anonymous Finder')
+    ),
+    manual_rows AS (
+      SELECT
+        COALESCE(NULLIF(TRIM(g.finder_name), ''), 'Anonymous Finder') AS finder_name,
+        CASE WHEN g.total_returns > 0 THEN g.total_returns ELSE 1 END AS total_returns,
+        COALESCE(NULLIF(g.last_return_date, ''), g.updated_at, g.created_at) AS last_return_date
+      FROM good_samaritan_entries g
+    )
     SELECT
-      COALESCE(NULLIF(TRIM(i.contact), ''), 'Anonymous Finder') AS finder_name,
-      COUNT(DISTINCT cr.item_id) AS total_returns,
-      MAX(cr.issued_at) AS last_return_date
-    FROM claim_requests cr
-    JOIN items i ON i.id = cr.item_id
-    WHERE
-      i.status = 'approved'
-      AND LOWER(i.type) = 'found'
-      AND cr.status = 'certificate_issued'
-      AND cr.issued_at IS NOT NULL
-    GROUP BY COALESCE(NULLIF(TRIM(i.contact), ''), 'Anonymous Finder')
+      combined.finder_name,
+      SUM(combined.total_returns) AS total_returns,
+      MAX(combined.last_return_date) AS last_return_date
+    FROM (
+      SELECT * FROM auto_rows
+      UNION ALL
+      SELECT * FROM manual_rows
+    ) combined
+    GROUP BY combined.finder_name
     ORDER BY total_returns DESC, last_return_date DESC, finder_name ASC
   `;
 
   db.all(sql, [], (err, rows) => {
     if (err) {
+      if ((err.message || '').includes('no such table: good_samaritan_entries')) {
+        const fallbackSql = `
+          SELECT
+            COALESCE(NULLIF(TRIM(cr.cert_name), ''), NULLIF(TRIM(cr.claimant_name), ''), 'Anonymous Finder') AS finder_name,
+            COUNT(DISTINCT cr.item_id) AS total_returns,
+            MAX(cr.issued_at) AS last_return_date
+          FROM claim_requests cr
+          WHERE
+            LOWER(COALESCE(cr.item_type, '')) = 'found'
+            AND cr.status = 'certificate_issued'
+            AND cr.issued_at IS NOT NULL
+          GROUP BY COALESCE(NULLIF(TRIM(cr.cert_name), ''), NULLIF(TRIM(cr.claimant_name), ''), 'Anonymous Finder')
+          ORDER BY total_returns DESC, last_return_date DESC, finder_name ASC
+        `;
+
+        return db.all(fallbackSql, [], (fallbackErr, fallbackRows) => {
+          if (fallbackErr) {
+            console.error('[api] Failed to fetch fallback good samaritans:', fallbackErr.message);
+            return res.status(500).json({ error: 'Failed to fetch good samaritans' });
+          }
+
+          const data = (fallbackRows || []).map((row) => ({
+            finder_name: row.finder_name,
+            total_returns: Number(row.total_returns || 0),
+            last_return_date: row.last_return_date || null
+          }));
+
+          return res.json({ data });
+        });
+      }
+
       console.error('[api] Failed to fetch good samaritans:', err.message);
       return res.status(500).json({ error: 'Failed to fetch good samaritans' });
     }
@@ -1528,6 +2084,19 @@ app.post('/api/claims', writeLimiter, requireCsrf, (req, res) => {
     }
 
     db.get(
+      'SELECT id, type, cat, title, loc, date FROM items WHERE id = ? AND status = ? LIMIT 1',
+      [itemId, 'approved'],
+      (itemDetailsErr, itemDetails) => {
+        if (itemDetailsErr) {
+          console.error('[api] Failed to load item details for claim:', itemDetailsErr.message);
+          return res.status(500).json({ error: 'Failed to process claim request' });
+        }
+
+        if (!itemDetails) {
+          return res.status(404).json({ error: 'Approved item not found' });
+        }
+
+        db.get(
       'SELECT id FROM claim_requests WHERE item_id = ? AND status = ? LIMIT 1',
       [itemId, 'pending'],
       (claimErr, claimRow) => {
@@ -1541,8 +2110,35 @@ app.post('/api/claims', writeLimiter, requireCsrf, (req, res) => {
         }
 
         db.run(
-          'INSERT INTO claim_requests (item_id, status, claimant_name, claimant_student_id, proof_image, claim_message) VALUES (?, ?, ?, ?, ?, ?)',
-          [itemId, 'pending', claimantName, claimantStudentId, proofImage, claimMessage],
+          `
+            INSERT INTO claim_requests (
+              item_id,
+              status,
+              claimant_name,
+              claimant_student_id,
+              proof_image,
+              claim_message,
+              item_type,
+              item_cat,
+              item_title,
+              item_loc,
+              item_date
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `,
+          [
+            itemId,
+            'pending',
+            claimantName,
+            claimantStudentId,
+            proofImage,
+            claimMessage,
+            itemDetails.type || '',
+            itemDetails.cat || '',
+            itemDetails.title || '',
+            itemDetails.loc || '',
+            itemDetails.date || ''
+          ],
           function onCreate(createErr) {
           if (createErr) {
             console.error('[api] Failed to create claim request:', createErr.message);
@@ -1562,6 +2158,8 @@ app.post('/api/claims', writeLimiter, requireCsrf, (req, res) => {
           });
           }
         );
+      }
+    );
       }
     );
   });
@@ -1599,8 +2197,18 @@ app.patch('/api/admin/claims/:id/verify', writeLimiter, requireCsrf, (req, res) 
   const findSql = `
     SELECT
       cr.id,
+      cr.item_id,
       cr.status,
+      cr.item_type,
+      cr.item_cat,
+      cr.item_title,
+      cr.item_loc,
+      cr.item_date,
       i.type,
+      i.cat,
+      i.title,
+      i.loc,
+      i.date,
       i.status AS item_status
     FROM claim_requests cr
     JOIN items i ON i.id = cr.item_id
@@ -1628,11 +2236,19 @@ app.patch('/api/admin/claims/:id/verify', writeLimiter, requireCsrf, (req, res) 
 
     const verifySql = `
       UPDATE claim_requests
-      SET status = 'verified', admin_note = ?, reviewed_at = CURRENT_TIMESTAMP
+      SET
+        status = 'verified',
+        admin_note = ?,
+        reviewed_at = CURRENT_TIMESTAMP,
+        item_type = COALESCE(NULLIF(item_type, ''), ?),
+        item_cat = COALESCE(NULLIF(item_cat, ''), ?),
+        item_title = COALESCE(NULLIF(item_title, ''), ?),
+        item_loc = COALESCE(NULLIF(item_loc, ''), ?),
+        item_date = COALESCE(NULLIF(item_date, ''), ?)
       WHERE id = ?
     `;
 
-    db.run(verifySql, [adminNote, claimId], function onVerify(updateErr) {
+    db.run(verifySql, [adminNote, row.type || '', row.cat || '', row.title || '', row.loc || '', row.date || '', claimId], function onVerify(updateErr) {
       if (updateErr) {
         console.error('[api] Failed to verify claim request:', updateErr.message);
         return res.status(500).json({ error: 'Failed to verify claim request' });
@@ -1642,7 +2258,30 @@ app.patch('/api/admin/claims/:id/verify', writeLimiter, requireCsrf, (req, res) 
         return res.status(404).json({ error: 'Claim request not found' });
       }
 
-      res.json({ message: 'Claim request verified' });
+      const resolvedItemId = Number(row.item_id || 0);
+      if (!isPositiveInteger(resolvedItemId)) {
+        return res.json({ message: 'Claim request verified' });
+      }
+
+      db.run(
+        'DELETE FROM item_matches WHERE source_item_id = ? OR target_item_id = ?',
+        [resolvedItemId, resolvedItemId],
+        (matchDeleteErr) => {
+          if (matchDeleteErr) {
+            console.error('[api] Failed to delete related match records:', matchDeleteErr.message);
+            return res.status(500).json({ error: 'Claim verified but failed to clean related matches' });
+          }
+
+          db.run('DELETE FROM items WHERE id = ? AND status = ?', [resolvedItemId, 'approved'], (itemDeleteErr) => {
+            if (itemDeleteErr) {
+              console.error('[api] Failed to delete resolved item:', itemDeleteErr.message);
+              return res.status(500).json({ error: 'Claim verified but failed to remove resolved item' });
+            }
+
+            res.json({ message: 'Claim request verified and resolved item removed' });
+          });
+        }
+      );
     });
   });
 });
@@ -1694,14 +2333,19 @@ app.patch('/api/admin/claims/:id/certificate', writeLimiter, requireCsrf, (req, 
         cr.claimant_student_id,
         cr.cert_name,
         cr.issued_at,
-        i.type,
+        COALESCE(i.type, cr.item_type) AS type,
+        COALESCE(i.cat, cr.item_cat) AS cat,
+        COALESCE(i.title, cr.item_title) AS title,
+        COALESCE(i.loc, cr.item_loc) AS loc,
+        COALESCE(i.date, cr.item_date) AS date,
         i.status AS item_status,
-        i.title,
-        i.cat,
-        i.loc,
-        i.date
+        cr.item_type,
+        cr.item_cat,
+        cr.item_title,
+        cr.item_loc,
+        cr.item_date
       FROM claim_requests cr
-      JOIN items i ON i.id = cr.item_id
+      LEFT JOIN items i ON i.id = cr.item_id
       WHERE cr.id = ?
     `,
     [claimId],
@@ -1719,12 +2363,13 @@ app.patch('/api/admin/claims/:id/certificate', writeLimiter, requireCsrf, (req, 
         return res.status(400).json({ error: 'Certificates can only be issued for found items' });
       }
 
-      if ((claimRow.item_status || '').toString().toLowerCase() !== 'approved') {
+      if (claimRow.item_status && (claimRow.item_status || '').toString().toLowerCase() !== 'approved') {
         return res.status(400).json({ error: 'Certificates require an approved found item' });
       }
 
-      if ((claimRow.status || '').toString().toLowerCase() !== 'verified') {
-        return res.status(400).json({ error: 'Certificates can only be issued for verified ownership requests' });
+      const normalizedClaimStatus = (claimRow.status || '').toString().toLowerCase();
+      if (normalizedClaimStatus !== 'verified' && normalizedClaimStatus !== 'approved') {
+        return res.status(400).json({ error: 'Certificates can only be issued for verified or approved ownership requests' });
       }
 
       const certName = certNameInput || claimRow.claimant_name;
@@ -1761,11 +2406,12 @@ app.patch('/api/admin/claims/:id/certificate', writeLimiter, requireCsrf, (req, 
             cr.requested_at,
             cr.reviewed_at,
             cr.issued_at,
-            i.title,
-            i.loc,
-            i.date
+            COALESCE(i.title, cr.item_title) AS title,
+            COALESCE(i.cat, cr.item_cat) AS cat,
+            COALESCE(i.loc, cr.item_loc) AS loc,
+            COALESCE(i.date, cr.item_date) AS date
           FROM claim_requests cr
-          JOIN items i ON i.id = cr.item_id
+          LEFT JOIN items i ON i.id = cr.item_id
           WHERE cr.id = ?
         `;
 

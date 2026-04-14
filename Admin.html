@@ -5,6 +5,21 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>FoundU Admin Board</title>
   <link rel="stylesheet" href="admin.css">
+  <script>
+    (function enforceAdminLoginGate() {
+      const ADMIN_ACCESS_KEY = 'founduAdminAccessGranted';
+      const ADMIN_ACCESS_TS_KEY = 'founduAdminAccessTimestamp';
+      const ADMIN_ACCESS_DURATION_MS = 8 * 60 * 60 * 1000;
+
+      const granted = sessionStorage.getItem(ADMIN_ACCESS_KEY) === '1';
+      const timestamp = Number(localStorage.getItem(ADMIN_ACCESS_TS_KEY) || '0');
+      const stillValid = Number.isFinite(timestamp) && (Date.now() - timestamp) <= ADMIN_ACCESS_DURATION_MS;
+
+      if (!granted || !stillValid) {
+        window.location.replace('Login.html');
+      }
+    })();
+  </script>
 </head>
 <body  oncontextmenu="return false;">
   <div class="bg-orb orb-one" aria-hidden="true"></div>
@@ -24,6 +39,7 @@
     <nav class="tabs">
       <button class="tab-btn active" data-section="items" onclick="showSection('items')">Items</button>
       <button class="tab-btn" data-section="dashboard" onclick="showSection('dashboard')">Dashboard <span id="claim-badge" class="badge hidden">0</span></button>
+      <button class="tab-btn" data-section="samaritans" onclick="showSection('samaritans')">Good Samaritan</button>
     </nav>
     </div>
   </header>
@@ -179,9 +195,59 @@
         </article>
       </div>
     </section>
+
+    <section id="samaritans">
+      <article class="section-hero">
+        <h2>Good Samaritan Management</h2>
+        <p>Add, edit, update, or remove recognition entries shown on the public Good Samaritan Board.</p>
+      </article>
+
+      <h3 class="section-title">Add New Entry</h3>
+      <form id="samaritan-form" class="samaritan-form">
+        <div class="inline-field">
+          <label for="samaritan-name">Finder Name</label>
+          <input id="samaritan-name" type="text" maxlength="120" required>
+        </div>
+        <div class="inline-field">
+          <label for="samaritan-returns">Returned Items</label>
+          <input id="samaritan-returns" type="number" min="1" max="999" value="1" required>
+        </div>
+        <div class="inline-field">
+          <label for="samaritan-date">Last Return Date</label>
+          <input id="samaritan-date" type="date">
+        </div>
+        <div class="inline-field inline-field-wide">
+          <label for="samaritan-note">Admin Note (optional)</label>
+          <textarea id="samaritan-note" rows="2" maxlength="400"></textarea>
+        </div>
+        <div class="samaritans-toolbar">
+          <button type="submit" class="action-btn approve">Add Entry</button>
+        </div>
+      </form>
+
+      <h3 class="section-title">Current Entries</h3>
+      <div class="table-shell">
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Finder Name</th>
+              <th>Returned Items</th>
+              <th>Last Return Date</th>
+              <th>Note</th>
+              <th>Updated</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="samaritanTable">
+            <!-- Samaritan entries injected by JS -->
+          </tbody>
+        </table>
+      </div>
+    </section>
   </main>
 
   <script src="security-shortcuts.js"></script>
-  <script src="admin.js?v=20260412b"></script>
+  <script src="admin.js?v=20260414a"></script>
 </body>
 </html>

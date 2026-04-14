@@ -1,66 +1,52 @@
-document.getElementById("loginForm").addEventListener("submit", function(e) {
-  e.preventDefault();
+const ADMIN_ACCESS_KEY = 'founduAdminAccessGranted';
+const ADMIN_ACCESS_TS_KEY = 'founduAdminAccessTimestamp';
+const ADMIN_ACCESS_DURATION_MS = 8 * 60 * 60 * 1000;
 
-  const schoolId = document.getElementById("schoolId").value.trim();
-  const password = document.getElementById("password").value;
-  const errorMsg = document.getElementById("errorMsg");
-
-  // Temporary check (replace with Firebase later)
-  if ((schoolId === "yearnerngtaon_2026" && password === "SABYAEMAMLAA") || (schoolId === "Nurtha" && password === "ankenosn")) {
-    errorMsg.classList.remove("active");
-    alert("Login successful! Redirecting...");
-    window.location.href = "Admin.html"; // placeholder redirect
-  } else {
-    errorMsg.textContent = "Invalid School ID or Password.";
-    errorMsg.classList.add("active");
-    setTimeout(() => {
-      errorMsg.classList.remove("active");
-    }, 4000);
-  }
-});
-
-/* ===== HOME PAGE LOGIC ===== */
-
-// Category buttons: filter item cards by category
-document.querySelectorAll('.category').forEach(cat => {
-  cat.addEventListener('click', () => {
-    const selected = cat.textContent.toLowerCase();
-    document.querySelectorAll('.item-card').forEach(card => {
-      const category = card.getAttribute('data-category');
-      if (category) {
-        const categoryValue = category.toLowerCase();
-        card.style.display = categoryValue === selected ? 'block' : 'none';
-      }
-    });
-  });
-});
-
-// Search bar functionality: filter item cards by title
-const searchBar = document.getElementById('searchBar');
-if (searchBar) {
-  searchBar.addEventListener('input', () => {
-    const query = searchBar.value.toLowerCase();
-    document.querySelectorAll('.item-card').forEach(card => {
-      const title = card.querySelector('h4').textContent.toLowerCase();
-      card.style.display = title.includes(query) ? 'block' : 'none';
-    });
-  });
+function setAdminAccessSession() {
+  const now = Date.now();
+  sessionStorage.setItem(ADMIN_ACCESS_KEY, '1');
+  localStorage.setItem(ADMIN_ACCESS_TS_KEY, String(now));
 }
 
-/* ===== LOGIN PAGE LOGIC ===== */
-const loginForm = document.getElementById("loginForm");
-if (loginForm) {
-  loginForm.addEventListener("submit", function(e) {
-    e.preventDefault();
-    const schoolId = document.getElementById("schoolId").value;
-    const password = document.getElementById("password").value;
+function hasActiveAdminAccess() {
+  const granted = sessionStorage.getItem(ADMIN_ACCESS_KEY) === '1';
+  const timestamp = Number(localStorage.getItem(ADMIN_ACCESS_TS_KEY) || '0');
+  if (!granted || !Number.isFinite(timestamp)) {
+    return false;
+  }
 
-    // Temporary check (replace with Firebase later)
-    if (schoolId === "12345" && password === "password") {
-      alert("Login successful! Redirecting...");
-      window.location.href = "home.html";
-    } else {
-      document.getElementById("errorMsg").textContent = "Invalid School ID or Password.";
+  return (Date.now() - timestamp) <= ADMIN_ACCESS_DURATION_MS;
+}
+
+const loginForm = document.getElementById('loginForm');
+if (loginForm) {
+  if (hasActiveAdminAccess()) {
+    window.location.replace('Admin.html');
+  }
+
+  loginForm.addEventListener('submit', (event) => {
+    event.preventDefault();
+
+    const schoolId = document.getElementById('schoolId').value.trim();
+    const password = document.getElementById('password').value;
+    const errorMsg = document.getElementById('errorMsg');
+
+    const isValidLogin =
+      (schoolId === 'yearnerngtaon_2026' && password === 'SABYAEMAMLAA')
+      || (schoolId === 'Nurtha' && password === 'ankenosn');
+
+    if (isValidLogin) {
+      errorMsg.classList.remove('active');
+      setAdminAccessSession();
+      alert('Login successful! Redirecting...');
+      window.location.href = 'Admin.html';
+      return;
     }
+
+    errorMsg.textContent = 'Invalid School ID or Password.';
+    errorMsg.classList.add('active');
+    setTimeout(() => {
+      errorMsg.classList.remove('active');
+    }, 4000);
   });
 }

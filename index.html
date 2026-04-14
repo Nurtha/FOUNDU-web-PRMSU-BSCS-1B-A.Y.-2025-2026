@@ -33,6 +33,11 @@
       box-sizing: border-box;
     }
 
+    html,
+    body {
+      overflow-x: hidden;
+    }
+
     body {
       font-family: 'DM Sans', "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       font-optical-sizing: auto;
@@ -45,6 +50,12 @@
         radial-gradient(circle at 55% 110%, rgba(167, 196, 255, 0.15) 0%, transparent 34%),
         linear-gradient(180deg, var(--ios-bg-0), var(--ios-bg-1));
       min-height: 100vh;
+      -ms-overflow-style: none;
+      scrollbar-width: none;
+    }
+
+    body::-webkit-scrollbar {
+      display: none;
     }
 
     h1,
@@ -270,8 +281,8 @@
 
     .nav-btn-active {
       color: #ffffff;
-      background: var(--ios-brand-gradient);
-      box-shadow: 0 10px 18px rgba(16, 41, 79, 0.26);
+      background: transparent;
+      box-shadow: none;
     }
 
     .nav-btn-inactive {
@@ -509,7 +520,7 @@
     }
 
     .ownership-dialog {
-      width: min(94vw, 460px);
+      width: min(94vw, 560px);
       max-height: calc(100vh - 32px);
       overflow-y: auto;
       border-radius: 22px;
@@ -549,7 +560,7 @@
 
     .ownership-id-wrap.is-visible {
       opacity: 1;
-      max-height: 120px;
+      max-height: 180px;
       transform: translateY(0);
     }
 
@@ -606,23 +617,20 @@
 
     .view-content {
       display: none;
-      animation: fadeIn 0.4s ease-out;
+      position: relative;
+      z-index: 2;
     }
 
-    .view-content.active {
+    .view-content.active,
+    .view-content.view-exit {
       display: block;
     }
 
-    @keyframes fadeIn {
-      from {
-        opacity: 0;
-        transform: translateY(10px);
-      }
-
-      to {
-        opacity: 1;
-        transform: translateY(0);
-      }
+    .view-content.view-exit {
+      position: absolute;
+      inset: 0;
+      z-index: 1;
+      pointer-events: none;
     }
 
     @keyframes drift {
@@ -888,9 +896,32 @@
     }
 
     .public-nav-panel {
+      position: relative;
       display: flex;
       align-items: center;
       gap: 0.5rem;
+    }
+
+    .nav-active-indicator {
+      position: absolute;
+      left: 0;
+      top: 0;
+      margin: 4px;
+      width: 0;
+      height: calc(100% - 8px);
+      border-radius: 999px;
+      background: var(--ios-brand-gradient);
+      box-shadow: 0 10px 18px rgba(16, 41, 79, 0.22);
+      transform: translate(0, 0);
+      opacity: 0;
+      transition: transform 420ms cubic-bezier(0.16, 1, 0.3, 1), width 420ms cubic-bezier(0.16, 1, 0.3, 1), height 420ms cubic-bezier(0.16, 1, 0.3, 1), opacity 220ms ease;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .public-nav-panel .nav-btn {
+      position: relative;
+      z-index: 1;
     }
 
     .creator-section-eyebrow {
@@ -1084,6 +1115,10 @@
         grid-template-columns: repeat(2, minmax(0, 1fr));
       }
 
+      .nav-active-indicator {
+        height: calc(50% - 7px);
+      }
+
       .public-nav-panel .nav-btn {
         width: 100%;
         min-height: 44px;
@@ -1201,6 +1236,10 @@
         grid-template-columns: 1fr;
       }
 
+      .nav-active-indicator {
+        height: calc(25% - 6px);
+      }
+
       .public-nav-panel .nav-btn {
         min-height: 42px;
       }
@@ -1260,6 +1299,15 @@
       .ownership-dialog {
         transition: none !important;
       }
+
+      .view-content,
+      .view-content.view-exit {
+        animation: none !important;
+      }
+
+      .nav-active-indicator {
+        transition: none !important;
+      }
     }
 
     /* Fallback utility so JS class toggles work even if utility CSS fails to load. */
@@ -1310,6 +1358,7 @@
         </div>
 
         <div class="public-nav-panel ios-glass flex items-center gap-2 p-1 rounded-full sm:gap-3">
+          <span id="nav-active-indicator" class="nav-active-indicator" aria-hidden="true"></span>
           <button onclick="showView('home')" id="btn-home"
             class="nav-btn nav-btn-active">
             Browse
@@ -1466,7 +1515,7 @@
             </div>
             <div class="space-y-1">
               <label class="text-sm font-semibold text-slate-700">Date</label>
-              <input type="date" id="in-date" required
+              <input type="date" id="in-date" required max=""
                 class="w-full p-3 outline-none">
             </div>
           </div>
@@ -1565,15 +1614,15 @@
         <div>
           <label for="ownership-role" class="block text-sm font-semibold text-slate-700 mb-1">Select Role</label>
           <select id="ownership-role" class="ios-select w-full p-3 outline-none" required>
-            <option value="">Choose role</option>
             <option value="student">Student</option>
             <option value="faculty">Faculty</option>
           </select>
+          <p id="ownership-role-warning" class="hidden mt-1 text-xs font-semibold text-red-600">Please choose Student or Faculty first.</p>
         </div>
 
         <div id="ownership-id-wrap" class="ownership-id-wrap">
           <label id="ownership-student-label" for="ownership-student-id" class="block text-sm font-semibold text-slate-700 mb-1">Enter your Student ID</label>
-          <input id="ownership-student-id" type="text" class="ios-input w-full p-3 outline-none" maxlength="24">
+          <input id="ownership-student-id" type="text" class="ios-input w-full p-3 outline-none" maxlength="11" inputmode="numeric">
         </div>
 
         <div>
@@ -1737,6 +1786,7 @@
     let latestMatchSourceType = 'lost';
     let alertTimerId = null;
     let goodSamaritanRefreshId = null;
+    let liveItemsRefreshId = null;
 
     let photoBase64 = '';
 
@@ -1932,12 +1982,114 @@
 
     document.getElementById('in-photo').addEventListener('change', handlePhotoInputChange);
 
+    function updateNavIndicator(activeButtonId, immediate = false) {
+      const panel = document.querySelector('.public-nav-panel');
+      const indicator = document.getElementById('nav-active-indicator');
+      const activeButton = document.getElementById(activeButtonId);
+      if (!panel || !indicator || !activeButton) {
+        return;
+      }
+
+      const panelRect = panel.getBoundingClientRect();
+      const buttonRect = activeButton.getBoundingClientRect();
+      const offsetX = buttonRect.left - panelRect.left - 4;
+      const offsetY = buttonRect.top - panelRect.top - 4;
+
+      if (immediate) {
+        indicator.style.transition = 'none';
+      } else {
+        indicator.style.transition = '';
+      }
+
+      indicator.style.opacity = '1';
+      indicator.style.width = `${buttonRect.width}px`;
+      indicator.style.height = `${buttonRect.height}px`;
+      indicator.style.transform = `translate(${offsetX}px, ${offsetY}px)`;
+
+      if (immediate) {
+        requestAnimationFrame(() => {
+          indicator.style.transition = '';
+        });
+      }
+    }
+
+    function handleArrowViewNavigation(event) {
+      if (event.defaultPrevented) {
+        return;
+      }
+
+      if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') {
+        return;
+      }
+
+      const target = event.target;
+      const isTypingField = target && (
+        target.tagName === 'INPUT' ||
+        target.tagName === 'TEXTAREA' ||
+        target.tagName === 'SELECT' ||
+        target.isContentEditable
+      );
+
+      if (isTypingField) {
+        return;
+      }
+
+      const orderedViews = ['home', 'report', 'creators', 'good-samaritan'];
+      const activeButton = document.querySelector('.public-nav-panel .nav-btn-active');
+      const currentView = activeButton ? activeButton.id.replace('btn-', '') : 'home';
+      const normalizedCurrentView = currentView === 'good-samaritan' ? 'good-samaritan' : currentView;
+      const currentIndex = Math.max(0, orderedViews.indexOf(normalizedCurrentView));
+      const delta = event.key === 'ArrowRight' ? 1 : -1;
+      const nextIndex = (currentIndex + delta + orderedViews.length) % orderedViews.length;
+
+      event.preventDefault();
+      showView(orderedViews[nextIndex]);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
     // View Logic
     function showView(view) {
-      document.querySelectorAll('.view-content').forEach(v => v.classList.remove('active'));
       const targetView = document.getElementById('view-' + view) || document.getElementById('view-home');
+      const currentView = document.querySelector('.view-content.active');
+
+      if (currentView && currentView !== targetView) {
+        currentView.classList.add('view-exit');
+        currentView.classList.remove('active');
+
+        const exitAnimation = currentView.animate([
+          { opacity: 1, transform: 'translateY(0) scale(1)', filter: 'blur(0px)' },
+          { opacity: 0, transform: 'translateY(-8px) scale(0.992)', filter: 'blur(1.5px)' }
+        ], {
+          duration: 320,
+          easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
+          fill: 'forwards'
+        });
+
+        exitAnimation.onfinish = () => {
+          currentView.classList.remove('view-exit');
+          currentView.style.opacity = '';
+          currentView.style.transform = '';
+          currentView.style.filter = '';
+        };
+      }
+
       targetView.classList.add('active');
       const normalizedView = targetView.id.replace('view-', '');
+
+      const enterAnimation = targetView.animate([
+        { opacity: 0, transform: 'translateY(12px) scale(0.994)', filter: 'blur(1.5px)' },
+        { opacity: 1, transform: 'translateY(0) scale(1)', filter: 'blur(0px)' }
+      ], {
+        duration: 520,
+        easing: 'cubic-bezier(0.16, 1, 0.3, 1)',
+        fill: 'both'
+      });
+
+      enterAnimation.onfinish = () => {
+        targetView.style.opacity = '';
+        targetView.style.transform = '';
+        targetView.style.filter = '';
+      };
 
       // Style buttons
       const isHome = normalizedView === 'home';
@@ -1949,6 +2101,15 @@
       document.getElementById('btn-report').className = isReport ? 'nav-btn nav-btn-active' : 'nav-btn nav-btn-inactive';
       document.getElementById('btn-creators').className = isCreators ? 'nav-btn nav-btn-active' : 'nav-btn nav-btn-inactive';
       document.getElementById('btn-good-samaritan').className = isGoodSamaritan ? 'nav-btn nav-btn-active' : 'nav-btn nav-btn-inactive';
+
+      const activeButtonId = isHome
+        ? 'btn-home'
+        : isReport
+          ? 'btn-report'
+          : isCreators
+            ? 'btn-creators'
+            : 'btn-good-samaritan';
+      updateNavIndicator(activeButtonId);
 
       if (isHome) renderItems();
       if (isCreators) renderCreators();
@@ -2358,6 +2519,7 @@
       const noteLabel = document.getElementById('ownership-note-label');
       const nameInput = document.getElementById('ownership-name');
       const roleInput = document.getElementById('ownership-role');
+      const roleWarning = document.getElementById('ownership-role-warning');
       const idWrap = document.getElementById('ownership-id-wrap');
       const studentInput = document.getElementById('ownership-student-id');
       const noteInput = document.getElementById('ownership-note');
@@ -2365,27 +2527,75 @@
       nameLabel.textContent = questions.name;
       noteLabel.textContent = questions.note;
 
+      const setRoleWarning = (message = '') => {
+        if (!roleWarning) {
+          return;
+        }
+
+        if (!message) {
+          roleWarning.classList.add('hidden');
+          roleWarning.textContent = 'Please choose Student or Faculty first.';
+          return;
+        }
+
+        roleWarning.textContent = message;
+        roleWarning.classList.remove('hidden');
+      };
+
+      const formatClaimantIdByRole = (value, role) => {
+        const raw = (value || '').toString();
+
+        if (role === 'faculty') {
+          const digits = raw.replace(/\D/g, '').slice(0, 4);
+          return `FAC-${digits}`;
+        }
+
+        const digits = raw.replace(/\D/g, '').slice(0, 8);
+        if (digits.length <= 2) {
+          return digits;
+        }
+
+        if (digits.length <= 3) {
+          return `${digits.slice(0, 2)}-${digits.slice(2)}`;
+        }
+
+        if (digits.length <= 4) {
+          return `${digits.slice(0, 2)}-${digits.slice(2, 3)}-${digits.slice(3)}`;
+        }
+
+        return `${digits.slice(0, 2)}-${digits.slice(2, 3)}-${digits.slice(3, 4)}-${digits.slice(4)}`;
+      };
+
       const applyRoleState = () => {
         const role = roleInput.value;
         const hasRole = role === 'student' || role === 'faculty';
 
         idWrap.classList.toggle('is-visible', hasRole);
         studentInput.required = hasRole;
+        setRoleWarning('');
 
         if (role === 'faculty') {
           studentLabel.textContent = 'Enter your Faculty ID';
           studentInput.placeholder = 'FAC-0000';
+          studentInput.maxLength = 8;
+          studentInput.inputMode = 'numeric';
+          studentInput.value = formatClaimantIdByRole(studentInput.value, role);
         } else {
           studentLabel.textContent = 'Enter your Student ID';
           studentInput.placeholder = '00-0-0-0000';
+          studentInput.maxLength = 11;
+          studentInput.inputMode = 'numeric';
+          studentInput.value = formatClaimantIdByRole(studentInput.value, 'student');
         }
 
-        const hasId = studentInput.value.trim().length > 0;
+        const hasId = role === 'faculty'
+          ? /^FAC-\d{4}$/i.test(studentInput.value.trim())
+          : /^\d{2}-\d-\d-\d{4}$/.test(studentInput.value.trim());
         submitBtn.disabled = !(hasRole && hasId);
       };
 
       nameInput.value = '';
-      roleInput.value = '';
+      roleInput.value = 'student';
       studentInput.value = '';
       noteInput.value = '';
       applyRoleState();
@@ -2398,7 +2608,19 @@
           studentInput.value = '';
           applyRoleState();
         };
-        const onIdInput = () => applyRoleState();
+        const onIdInput = () => {
+          const role = roleInput.value;
+          if (role !== 'student' && role !== 'faculty') {
+            setRoleWarning('Please choose Student or Faculty before entering your ID.');
+            studentInput.value = '';
+            submitBtn.disabled = true;
+            return;
+          }
+
+          studentInput.value = formatClaimantIdByRole(studentInput.value, role);
+          setRoleWarning('');
+          applyRoleState();
+        };
         const onOverlayClick = (event) => {
           if (event.target === modal) {
             close(null);
@@ -2411,6 +2633,27 @@
         };
         const onSubmit = (event) => {
           event.preventDefault();
+
+          const selectedRole = roleInput.value;
+          if (selectedRole !== 'student' && selectedRole !== 'faculty') {
+            setRoleWarning('Please choose Student or Faculty before submitting.');
+            roleInput.focus();
+            return;
+          }
+
+          const normalizedId = studentInput.value.trim();
+          const validId = selectedRole === 'faculty'
+            ? /^FAC-\d{4}$/i.test(normalizedId)
+            : /^\d{2}-\d-\d-\d{4}$/.test(normalizedId);
+
+          if (!validId) {
+            setRoleWarning(selectedRole === 'faculty'
+              ? 'Faculty ID must follow FAC-0000.'
+              : 'Student ID must follow 00-0-0-0000.');
+            studentInput.focus();
+            return;
+          }
+
           close({
             claimantName: nameInput.value.trim(),
             claimantRole: roleInput.value,
@@ -2561,6 +2804,28 @@
       return payload.data || [];
     }
 
+    function getTodayIsoDate() {
+      const now = new Date();
+      const year = now.getFullYear();
+      const month = String(now.getMonth() + 1).padStart(2, '0');
+      const day = String(now.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    }
+
+    function applyDateConstraints() {
+      const dateInput = document.getElementById('in-date');
+      if (!dateInput) {
+        return;
+      }
+
+      const todayIso = getTodayIsoDate();
+      dateInput.max = todayIso;
+
+      if (dateInput.value && dateInput.value > todayIso) {
+        dateInput.value = todayIso;
+      }
+    }
+
     async function loadItems() {
       setItemsLoadingState(true);
       try {
@@ -2584,9 +2849,28 @@
       }
     }
 
+    async function refreshItemsSilently() {
+      try {
+        items = await fetchItemsOnce();
+        updateHeroStats();
+        renderItems();
+      } catch (error) {
+        // Keep polling without interrupting users when backend is temporarily unavailable.
+      }
+    }
+
     // Form Logic
     async function handleFormSubmit(e) {
       e.preventDefault();
+
+      const dateInput = document.getElementById('in-date');
+      const todayIso = getTodayIsoDate();
+      if (dateInput && dateInput.value > todayIso) {
+        showAlert('Future dates are not allowed. Please pick today or an earlier date.');
+        dateInput.value = todayIso;
+        dateInput.focus();
+        return;
+      }
 
       const newItem = {
         type: currentFormType,
@@ -2618,6 +2902,7 @@
         document.getElementById('report-form').reset();
         setFormType('lost');
         clearPhotoPreview();
+        applyDateConstraints();
         document.getElementById('in-date').valueAsDate = new Date();
         showAlert('Your post is submitted and waiting for admin approval.', {
           durationMs: 5000,
@@ -2685,6 +2970,7 @@
 
     window.onload = async () => {
       const introTransition = playTitleTransition();
+      applyDateConstraints();
       document.getElementById('in-date').valueAsDate = new Date();
       try {
         await resolveApiBase();
@@ -2706,6 +2992,22 @@
           loadGoodSamaritanBoard();
         }
       }, 30000);
+
+      if (liveItemsRefreshId) {
+        clearInterval(liveItemsRefreshId);
+      }
+      liveItemsRefreshId = setInterval(() => {
+        refreshItemsSilently();
+      }, 8000);
+
+      updateNavIndicator('btn-home', true);
+      document.addEventListener('keydown', handleArrowViewNavigation);
+      window.addEventListener('resize', () => {
+        const activeButton = document.querySelector('.public-nav-panel .nav-btn-active');
+        if (activeButton && activeButton.id) {
+          updateNavIndicator(activeButton.id, true);
+        }
+      });
 
       await introTransition;
     };

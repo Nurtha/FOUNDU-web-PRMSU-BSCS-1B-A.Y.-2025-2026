@@ -1,9 +1,12 @@
 let items = [];
 let claims = [];
 let matches = [];
+let samaritans = [];
 let API_BASE = '';
 let CSRF_TOKEN = '';
 let ADMIN_API_KEY = '';
+let adminLiveRefreshTimerId = null;
+let isAdminRefreshing = false;
 const API_BASE_STORAGE_KEY = 'founduApiBase';
 const ADMIN_KEY_STORAGE_KEY = 'founduAdminApiKey';
 const ADMIN_KEY_COOKIE_NAME = 'foundu_admin_api_key';
@@ -42,9 +45,11 @@ function showTextInputDialog(options = {}) {
     placeholder = '',
     confirmText = 'Submit',
     cancelText = 'Cancel',
+    showCancel = true,
     required = false,
     multiline = false,
-    secret = false
+    secret = false,
+    readOnly = false
   } = options;
 
   return new Promise((resolve) => {
@@ -90,6 +95,7 @@ function showTextInputDialog(options = {}) {
 
     field.value = defaultValue;
     field.placeholder = placeholder;
+    field.readOnly = Boolean(readOnly);
     field.style.cssText = [
       'width:100%',
       'box-sizing:border-box',
@@ -98,6 +104,7 @@ function showTextInputDialog(options = {}) {
       'padding:10px 12px',
       'font-size:14px',
       'font-family:inherit',
+      readOnly ? 'background:#f8fafc' : 'background:#ffffff',
       multiline ? 'min-height:92px' : 'min-height:42px'
     ].join(';');
 
@@ -114,7 +121,9 @@ function showTextInputDialog(options = {}) {
     confirmBtn.textContent = confirmText;
     confirmBtn.style.cssText = 'border:none;background:#1f77ff;color:#ffffff;padding:8px 12px;border-radius:10px;cursor:pointer;';
 
-    actions.appendChild(cancelBtn);
+    if (showCancel) {
+      actions.appendChild(cancelBtn);
+    }
     actions.appendChild(confirmBtn);
 
     dialog.appendChild(heading);
@@ -159,7 +168,9 @@ function showTextInputDialog(options = {}) {
       }
     });
 
-    cancelBtn.addEventListener('click', () => close(null));
+    if (showCancel) {
+      cancelBtn.addEventListener('click', () => close(null));
+    }
     confirmBtn.addEventListener('click', submit);
     document.addEventListener('keydown', onKeyDown);
 
@@ -353,6 +364,16 @@ function formatDateTime(value) {
   return parsed.toLocaleString();
 }
 
+function escapeHtml(value) {
+  return (value || '')
+    .toString()
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 function getClaimStatusClass(status) {
   const normalizedStatus = normalizeClaimStatus(status);
 
@@ -462,8 +483,9 @@ function loadClaims() {
     const claimType = normalizeClaimType(claim.type);
     const isPending = claimStatus === 'pending';
     const isVerified = claimStatus === 'verified';
+    const isApproved = claimStatus === 'approved';
     const isCertificateIssued = claimStatus === 'certificate_issued';
-    const canIssueCertificate = claimType === 'found' && isVerified;
+    const canIssueCertificate = claimType === 'found' && (isVerified || isApproved);
 
     const row = document.createElement('tr');
     row.innerHTML = `
@@ -472,8 +494,8 @@ function loadClaims() {
       <td>${claim.cat || '-'}</td>
       <td>${claim.title}</td>
       <td>${claim.claimant_name || '-'}</td>
-      <td>${claim.claimant_student_id || '-'}</td>
-      <td>${claim.claim_message || '-'}</td>
+      <td class="claim-student-id-cell">${claim.claimant_student_id || '-'}</td>
+      <td>${claim.claim_message ? `<button class="action-btn note" onclick="viewClaimNote(${claim.id})">View Note</button>` : '-'}</td>
       <td>${claim.proof_image ? `<button class="action-btn" onclick="viewProof(${claim.id})">View Proof</button>` : '-'}</td>
       <td>${claim.loc}</td>
       <td>${formatDateTime(claim.requested_at)}</td>
@@ -487,6 +509,30 @@ function loadClaims() {
       </td>
     `;
     table.appendChild(row);
+  });
+}
+
+async function viewClaimNote(claimId) {
+  const claim = findClaimById(claimId);
+  if (!claim) {
+    alert('Claim note not found.');
+    return;
+  }
+
+  const note = (claim.claim_message || '').toString().trim();
+  if (!note) {
+    alert('No claim note was provided.');
+    return;
+  }
+
+  await showTextInputDialog({
+    title: `Claim #${formatClaimDisplayId(claim.id)} Note`,
+    message: 'Submitted by claimant:',
+    defaultValue: note,
+    confirmText: 'Close',
+    showCancel: false,
+    multiline: true,
+    readOnly: true
   });
 }
 
@@ -532,6 +578,254 @@ function loadMatches() {
 
     table.appendChild(row);
   });
+}
+
+function normalizeDateInput(value) {
+  const raw = (value || '').toString().trim();
+  if (!raw) {
+    return '';
+  }
+
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) {
+    return raw;
+  }
+
+  const year = parsed.getFullYear();
+  const month = String(parsed.getMonth() + 1).padStart(2, '0');
+  const day = String(parsed.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function loadSamaritans() {
+  const table = document.getElementById('samaritanTable');
+  if (!table) {
+    return;
+  }
+
+  table.innerHTML = '';
+
+  if (!samaritans.length) {
+    const row = document.createElement('tr');
+    row.innerHTML = '<td colspan="8">No Good Samaritan entries yet.</td>';
+    table.appendChild(row);
+    return;
+  }
+
+  samaritans.forEach((entry) => {
+    const sourceType = (entry.source_type || 'manual').toString();
+    const canDelete = true;
+    const row = document.createElement('tr');
+    row.innerHTML = `
+      <td>${escapeHtml(entry.source_key || entry.id || '-')}</td>
+      <td>${escapeHtml(entry.finder_name || '-')}</td>
+      <td>${Number(entry.total_returns || 0)}</td>
+      <td>${escapeHtml(entry.last_return_date || '-')}</td>
+      <td>${escapeHtml(entry.note || '-')}</td>
+      <td>${escapeHtml(sourceType)}</td>
+      <td>${formatDateTime(entry.updated_at || entry.created_at)}</td>
+      <td>
+        <button class="action-btn approve" onclick="editSamaritan('${encodeURIComponent(JSON.stringify(entry))}')">Edit</button>
+        ${canDelete ? `<button class="action-btn delete" onclick="deleteSamaritan('${encodeURIComponent(JSON.stringify(entry))}')">Delete</button>` : ''}
+      </td>
+    `;
+    table.appendChild(row);
+  });
+}
+
+function resetSamaritanForm() {
+  const form = document.getElementById('samaritan-form');
+  if (!form) {
+    return;
+  }
+
+  form.reset();
+  const returnsInput = document.getElementById('samaritan-returns');
+  if (returnsInput) {
+    returnsInput.value = '1';
+  }
+}
+
+function bindSamaritanForm() {
+  const form = document.getElementById('samaritan-form');
+  if (!form) {
+    return;
+  }
+
+  if (form.dataset.bound === '1') {
+    return;
+  }
+  form.dataset.bound = '1';
+
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+
+    const finderName = document.getElementById('samaritan-name').value.trim();
+    const totalReturns = Number(document.getElementById('samaritan-returns').value);
+    const lastReturnDate = normalizeDateInput(document.getElementById('samaritan-date').value);
+    const note = document.getElementById('samaritan-note').value.trim();
+
+    if (!finderName) {
+      alert('Finder name is required.');
+      return;
+    }
+
+    if (!Number.isInteger(totalReturns) || totalReturns <= 0) {
+      alert('Returned items must be a positive number.');
+      return;
+    }
+
+    try {
+      const response = await apiFetch('/api/admin/good-samaritans', {
+        method: 'POST',
+        body: JSON.stringify({
+          finderName,
+          totalReturns,
+          lastReturnDate,
+          note
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to add entry (${response.status})`);
+      }
+
+      await fetchAdminSamaritans();
+      resetSamaritanForm();
+      alert('Good Samaritan entry added.');
+    } catch (error) {
+      console.error('[admin] Failed to add Good Samaritan entry:', error);
+      alert(error.message || 'Failed to add entry.');
+    }
+  });
+}
+
+async function editSamaritan(entryInput) {
+  const entry = typeof entryInput === 'string' ? JSON.parse(decodeURIComponent(entryInput)) : entryInput;
+  if (!entry) {
+    alert('Entry not found.');
+    return;
+  }
+
+  const nameInput = await showTextInputDialog({
+    title: 'Edit Good Samaritan',
+    message: 'Update finder name:',
+    defaultValue: entry.finder_name || '',
+    placeholder: 'Finder name',
+    confirmText: 'Next',
+    required: true
+  });
+
+  if (nameInput === null) {
+    return;
+  }
+
+  const returnsInput = await showTextInputDialog({
+    title: 'Edit Good Samaritan',
+    message: 'Update returned items count:',
+    defaultValue: String(entry.total_returns || 1),
+    placeholder: 'Returned items count',
+    confirmText: 'Next',
+    required: true
+  });
+
+  if (returnsInput === null) {
+    return;
+  }
+
+  const dateInput = await showTextInputDialog({
+    title: 'Edit Good Samaritan',
+    message: 'Update last return date (YYYY-MM-DD, optional):',
+    defaultValue: normalizeDateInput(entry.last_return_date || ''),
+    placeholder: 'YYYY-MM-DD',
+    confirmText: 'Next'
+  });
+
+  if (dateInput === null) {
+    return;
+  }
+
+  const noteInput = await showTextInputDialog({
+    title: 'Edit Good Samaritan',
+    message: 'Update admin note (optional):',
+    defaultValue: entry.note || '',
+    placeholder: 'Admin note',
+    confirmText: 'Save',
+    multiline: true
+  });
+
+  if (noteInput === null) {
+    return;
+  }
+
+  const finderName = nameInput.trim();
+  const totalReturns = Number(returnsInput);
+  const lastReturnDate = normalizeDateInput(dateInput);
+
+  if (!finderName) {
+    alert('Finder name is required.');
+    return;
+  }
+
+  if (!Number.isInteger(totalReturns) || totalReturns <= 0) {
+    alert('Returned items must be a positive number.');
+    return;
+  }
+
+  try {
+    const response = await apiFetch(`/api/admin/good-samaritans/${encodeURIComponent(entry.source_type || 'manual')}/${encodeURIComponent(entry.source_key || `manual:${entry.id}`)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        finderName,
+        totalReturns,
+        lastReturnDate,
+        note: noteInput.trim()
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to update entry (${response.status})`);
+    }
+
+    await fetchAdminSamaritans();
+    alert('Good Samaritan entry updated.');
+  } catch (error) {
+    console.error('[admin] Failed to update Good Samaritan entry:', error);
+    alert(error.message || 'Failed to update entry.');
+  }
+}
+
+async function deleteSamaritan(entryInput) {
+  const entry = typeof entryInput === 'string' ? JSON.parse(decodeURIComponent(entryInput)) : entryInput;
+  if (!entry) {
+    alert('Entry not found.');
+    return;
+  }
+
+  const sourceType = (entry.source_type || 'manual').toString().toLowerCase();
+  const warning = sourceType === 'certificate'
+    ? 'This will remove all certificate-issued records in this system-generated group from the board. Continue?'
+    : `Delete Good Samaritan entry ${entry.source_key || entry.id}?`;
+
+  if (!confirm(warning)) {
+    return;
+  }
+
+  try {
+    const response = await apiFetch(`/api/admin/good-samaritans/${encodeURIComponent(entry.source_type || 'manual')}/${encodeURIComponent(entry.source_key || `manual:${entry.id}`)}`, {
+      method: 'DELETE'
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to delete entry (${response.status})`);
+    }
+
+    await fetchAdminSamaritans();
+    alert('Good Samaritan entry deleted.');
+  } catch (error) {
+    console.error('[admin] Failed to delete Good Samaritan entry:', error);
+    alert(error.message || 'Failed to delete entry.');
+  }
 }
 
 function viewProof(claimId) {
@@ -721,6 +1015,24 @@ async function fetchAdminMatches() {
   const payload = await response.json();
   matches = payload.data || [];
   loadMatches();
+}
+
+async function fetchAdminSamaritans() {
+  const response = await apiFetch('/api/admin/good-samaritans');
+  if (!response.ok) {
+    if (response.status === 401) {
+      throw new Error(`Unauthorized admin key (401) for ${API_BASE}`);
+    }
+
+    console.warn(`[admin] Good Samaritan entries unavailable (${response.status}).`);
+    samaritans = [];
+    loadSamaritans();
+    return;
+  }
+
+  const payload = await response.json();
+  samaritans = payload.data || [];
+  loadSamaritans();
 }
 
 function viewMatchDetails(matchId) {
@@ -1148,6 +1460,32 @@ async function deleteItem(id) {
   }
 }
 
+async function refreshAdminDataSilently() {
+  if (isAdminRefreshing) {
+    return;
+  }
+
+  isAdminRefreshing = true;
+  try {
+    await fetchAdminItems();
+    await fetchClaimRequests();
+    await fetchAdminMatches();
+    await fetchAdminSamaritans();
+  } catch (error) {
+    console.warn('[admin] Live refresh skipped due to fetch error:', error.message || error);
+  } finally {
+    isAdminRefreshing = false;
+  }
+}
+
+function startAdminLiveRefresh() {
+  if (adminLiveRefreshTimerId) {
+    clearInterval(adminLiveRefreshTimerId);
+  }
+
+  adminLiveRefreshTimerId = setInterval(refreshAdminDataSilently, 8000);
+}
+
 // Navigation
 function showSection(sectionId) {
   document.querySelectorAll('main section').forEach((section) => section.classList.remove('active'));
@@ -1163,9 +1501,12 @@ window.onload = async () => {
     await resolveApiBase();
     await loadAdminApiKey();
     await fetchCsrfToken();
+    bindSamaritanForm();
     await fetchAdminItems();
     await fetchClaimRequests();
     await fetchAdminMatches();
+    await fetchAdminSamaritans();
+    startAdminLiveRefresh();
   } catch (error) {
     const isUnauthorized = /\(401\)|Unauthorized admin key/i.test(error.message || '');
 
@@ -1174,9 +1515,13 @@ window.onload = async () => {
         clearAdminApiKey();
         alert(`Admin key was rejected by ${API_BASE}. Please enter it again.`);
         await loadAdminApiKey();
+        await fetchCsrfToken();
+        bindSamaritanForm();
         await fetchAdminItems();
         await fetchClaimRequests();
         await fetchAdminMatches();
+        await fetchAdminSamaritans();
+        startAdminLiveRefresh();
         return;
       } catch (retryError) {
         console.error('[admin] Startup retry failed:', retryError);
