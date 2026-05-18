@@ -1,7 +1,6 @@
 const express = require('express');
 const path = require('path');
 const crypto = require('crypto');
-const sqlite3 = require('sqlite3').verbose();
 const helmet = require('helmet');
 const hpp = require('hpp');
 const rateLimit = require('express-rate-limit');
@@ -35,6 +34,177 @@ const maxPhotosPerItem = 4;
 const MATCH_SCORE_THRESHOLD = 40;
 const MATCH_DATE_WINDOW_DAYS = 5;
 let matchBackfillPromise = null;
+
+const remoteDbUrl = (process.env.LIBSQL_URL || process.env.TURSO_DATABASE_URL || '').trim();
+const remoteDbAuthToken = (process.env.LIBSQL_AUTH_TOKEN || process.env.TURSO_AUTH_TOKEN || '').trim();
+const useRemoteDatabase = Boolean(remoteDbUrl);
+
+function normalizeDbParams(params, callback) {
+  let actualParams = params;
+  let actualCallback = callback;
+
+  if (typeof actualParams === 'function') {
+    actualCallback = actualParams;
+    actualParams = [];
+  }
+
+  if (actualParams === undefined || actualParams === null) {
+    actualParams = [];
+  }
+
+  if (!Array.isArray(actualParams)) {
+    actualParams = [actualParams];
+  }
+
+  return { params: actualParams, callback: actualCallback };
+}
+
+let createLibsqlClient = null;
+
+function getLibsqlCreateClient() {
+  if (createLibsqlClient) {
+    return createLibsqlClient;
+  }
+
+  try {
+    ({ createClient: createLibsqlClient } = require('@libsql/client'));
+  } catch (error) {
+    throw new Error('Missing @libsql/client. Install dependencies before deploying to Vercel with a remote SQLite-compatible database.');
+  }
+
+  return createLibsqlClient;
+}
+
+function createRemoteDatabase(onReady) {
+  const createClient = getLibsqlCreateClient();
+  const client = createClient({
+    url: remoteDbUrl,
+    authToken: remoteDbAuthToken || undefined
+  });
+
+  const notifyReady = (error) => {
+    if (typeof onReady === 'function') {
+      setImmediate(() => onReady(error || null));
+    }
+  };
+
+  notifyReady(null);
+
+  const toResultContext = (result) => ({
+    lastID: Number(result?.lastInsertRowid ?? result?.lastInsertRowId ?? 0) || 0,
+    changes: Number(result?.rowsAffected ?? 0) || 0
+  });
+
+  return {
+    run(sql, params, callback) {
+      const normalized = normalizeDbParams(params, callback);
+      client.execute({ sql, args: normalized.params })
+        .then((result) => {
+          if (typeof normalized.callback === 'function') {
+            normalized.callback.call(toResultContext(result), null);
+          }
+        })
+        .catch((error) => {
+          if (typeof normalized.callback === 'function') {
+            normalized.callback.call({ lastID: 0, changes: 0 }, error);
+          }
+        });
+    },
+
+    get(sql, params, callback) {
+      const normalized = normalizeDbParams(params, callback);
+      client.execute({ sql, args: normalized.params })
+        .then((result) => {
+          if (typeof normalized.callback === 'function') {
+            normalized.callback(null, (result.rows && result.rows[0]) || null);
+          }
+        })
+        .catch((error) => {
+          if (typeof normalized.callback === 'function') {
+            normalized.callback(error);
+          }
+        });
+    },
+
+    all(sql, params, callback) {
+      const normalized = normalizeDbParams(params, callback);
+      client.execute({ sql, args: normalized.params })
+        .then((result) => {
+          if (typeof normalized.callback === 'function') {
+            normalized.callback(null, result.rows || []);
+          }
+        })
+        .catch((error) => {
+          if (typeof normalized.callback === 'function') {
+            normalized.callback(error);
+          }
+        });
+    },
+
+    close(callback) {
+      if (typeof client.close !== 'function') {
+        if (typeof callback === 'function') {
+          callback(null);
+        }
+        return;
+      }
+
+      client.close()
+        .then(() => {
+          if (typeof callback === 'function') {
+            callback(null);
+          }
+        })
+        .catch((error) => {
+          if (typeof callback === 'function') {
+            callback(error);
+          }
+        });
+    }
+  };
+}
+
+function createLocalDatabase(onReady) {
+  const sqlite3 = require('sqlite3').verbose();
+  const database = new sqlite3.Database(path.join(__dirname, 'foundu.db'), (error) => {
+    if (typeof onReady === 'function') {
+      onReady(error || null);
+    }
+  });
+
+  return {
+    run(sql, params, callback) {
+      const normalized = normalizeDbParams(params, callback);
+      database.run(sql, normalized.params, function onRun(error) {
+        if (typeof normalized.callback === 'function') {
+          normalized.callback.call(this, error || null);
+        }
+      });
+    },
+
+    get(sql, params, callback) {
+      const normalized = normalizeDbParams(params, callback);
+      database.get(sql, normalized.params, normalized.callback);
+    },
+
+    all(sql, params, callback) {
+      const normalized = normalizeDbParams(params, callback);
+      database.all(sql, normalized.params, normalized.callback);
+    },
+
+    close(callback) {
+      database.close(callback);
+    }
+  };
+}
+
+function createDatabase(onReady) {
+  if (useRemoteDatabase) {
+    return createRemoteDatabase(onReady);
+  }
+
+  return createLocalDatabase(onReady);
+}
 
 function runDb(sql, params = []) {
   return new Promise((resolve, reject) => {
@@ -490,7 +660,7 @@ app.use((req, res, next) => {
 
 app.use('/api/admin', requireAdminKey);
 
-const db = new sqlite3.Database('./foundu.db', (err) => {
+const db = createDatabase((err) => {
   if (err) {
     console.error('[db] Connection failed:', err.message);
     return;
@@ -2525,6 +2695,10 @@ app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'index.html'));
 });
 
-app.listen(port, () => {
-  console.log(`[server] Running at http://localhost:${port}`);
-});
+if (require.main === module) {
+  app.listen(port, () => {
+    console.log(`[server] Running at http://localhost:${port}`);
+  });
+}
+
+module.exports = app;

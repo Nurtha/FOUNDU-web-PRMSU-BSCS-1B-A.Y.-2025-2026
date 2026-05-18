@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node script.js",
     "server": "node script.js",
+    "migrate:db": "node scripts/migrate-local-db.js",
     "test": "node --test tests/*.test.js"
   },
   "repository": {
@@ -25,6 +26,7 @@
     "express-rate-limit": "^8.3.1",
     "helmet": "^8.1.0",
     "hpp": "^0.2.3",
+    "@libsql/client": "^0.15.15",
     "sqlite3": "^6.0.1"
   }
 }
