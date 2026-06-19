@@ -1,4 +1,5 @@
 Single-server mode (recommended)
+Only tested on Windows
 
 1. Install and run:
 - `npm install`
