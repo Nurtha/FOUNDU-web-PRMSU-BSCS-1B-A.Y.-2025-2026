@@ -2,9 +2,9 @@ Single-server mode (recommended)
 Only tested on Windows
 
 1. Install
-- 'sqlite'
-- 'npm'
-- 'ngrok' (if you want to share to your friends)
+- `sqlite`
+- `npm`
+- `ngrok` (if you want to share to your friends)
 
 2. Install and run:
 - `npm install`
