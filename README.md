@@ -18,7 +18,7 @@ Only tested on Windows
 - `POST /api/items`
 - other `/api/*` routes
 
-5. Share publicly with one ngrok tunnel:
+5.Share publicly with one ngrok tunnel:
 - `ngrok http 3000`
 
 Notes:
