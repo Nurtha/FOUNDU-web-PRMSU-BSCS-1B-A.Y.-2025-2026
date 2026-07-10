@@ -1,3 +1,5 @@
 .env
 node_modules
 
+tmux-server-595.log
+*.log
