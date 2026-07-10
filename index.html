@@ -5,6 +5,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>FoundU | Lost and Found Platform</title>
+<script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-4225809055600759"
+     crossorigin="anonymous"></script>
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css"
     crossorigin="anonymous" referrerpolicy="no-referrer">
@@ -2310,13 +2312,24 @@
        {
          id: 1,
          name: "Athrun Kyle Sison",
-         position: "Full-stack Developer",
+         position: "Full-Stack Developer",
          bio: "I'm The God Of My Programs",
          age: 18,
          contact: "athrun.sison7@gmail.com",
          photo: "Image_resources/Athrun.jpg",
          initials: "AS",
          color: "from-blue-400 to-cyan-400"
+       },
+       {
+	 id: 2,
+         name: "Shaina Orianza Gunas",
+	 position: "Full-Stack Developer",
+	 bio: "Buhay kung Buhay",
+	 age: 18,
+         contact: "leighfernandez20@gmail.com",
+	 photo: "Image_resources/Shaina.jpg",
+	 initials: "SG",
+	 color: "from-blue-400 to-cyan-400"
        }
     ];
 
@@ -2332,6 +2345,7 @@
           <div class="creator-position">${creator.position}</div>
           <div class="creator-bio">"${creator.bio}"</div>
           <div class="creator-meta">Age: ${creator.age}</div>
+	  <div class="creator-contact"><i class="fas fa-envelope w-4"></i> <a href="mailto:${creator.contact}" style="color:inherit;">${creator.contact}</a></div>
         </div>
       `).join('');
     }
