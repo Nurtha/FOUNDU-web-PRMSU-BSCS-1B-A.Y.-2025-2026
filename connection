@@ -1,0 +1,57 @@
+Imports System.Data
+Imports System.Data.OleDb
+Imports System.IO
+
+Module variable
+    Public db As New OleDbConnection
+    Public tbluser As New OleDbDataAdapter
+    
+    Public dbcmd As New OleDbCommand
+    Public dbds As New DataSet
+   
+    Public recpointer As Integer
+    Public trec As Integer
+    Public sw As Boolean
+   
+    
+   
+       Sub opendb()
+        Try
+            db = New OleDb.OleDbConnection("PROVIDER=microsoft.jet.oledb.4.0; data source = " & Application.StartupPath & "\dbase\secure.mdb")
+            tbluser = New OleDb.OleDbDataAdapter("SELECT * FROM tbluser", db)
+            dbds = New DataSet()
+            tbluser.Fill(dbds, "tbluser")
+
+            If dbds.Tables("tbluser").Rows.Count > 0 Then
+                recpointer = 0
+                trec = CInt(dbds.Tables("tbluser").Rows.Count) - 1
+            End If
+
+        Catch ex As Exception
+            MsgBox(Err.ToString)
+        Finally
+
+            db.Close()
+       
+        End Try
+    End Sub
+    
+   
+    Sub sqlquery()
+        Try
+            tbluser = New OleDb.OleDbDataAdapter("SELECT [User ID],[User Name],[Position],[Privileges] FROM tbluser", db)
+            dbds = New DataSet()
+            tbluser.Fill(dbds, "tbluser")
+
+            If dbds.Tables("tbluser").Rows.Count > 0 Then
+                recpointer = 0
+                trec = CInt(dbds.Tables("tbluser").Rows.Count) - 1
+            End If
+
+        Catch err As Exception
+            MsgBox(err.ToString)
+        Finally
+            db.Close()
+        End Try
+    End Sub
+    
