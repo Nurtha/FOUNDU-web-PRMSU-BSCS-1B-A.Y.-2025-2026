@@ -1,0 +1,237 @@
+Public Class frmuser
+
+  
+    Private Sub frmuser_Load(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles MyBase.Load
+        opendbuser()
+        sqlqueryuser()
+        Lock()
+
+        dguser.DataSource = dbds.Tables("tbluser")
+        display()
+    End Sub
+    Sub lock()
+        txteid.ReadOnly = True
+        txtuname.ReadOnly = True
+        txtpw.ReadOnly = True
+        txtrpw.ReadOnly = True
+        txtpos.ReadOnly = True
+        txtpriv.ReadOnly = True
+        cbopriv.Visible = False
+
+    End Sub
+    Sub unlock()
+        txteid.ReadOnly = False
+        txtuname.ReadOnly = False
+        txtpw.ReadOnly = False
+        txtrpw.ReadOnly = False
+        txtpos.ReadOnly = False
+        txtpriv.ReadOnly = False
+        cbopriv.Visible = True
+    End Sub
+    Sub navlock()
+        cmdfirst.Enabled = False
+        cmdnext.Enabled = False
+        cmdprev.Enabled = False
+        cmdlast.Enabled = False
+
+    End Sub
+    Sub navunlock()
+        cmdfirst.Enabled = True
+        cmdnext.Enabled = True
+        cmdprev.Enabled = True
+        cmdlast.Enabled = True
+
+    End Sub
+    Sub itemsclear()
+        txteid.Text = ""
+        txtuname.Text = ""
+        txtpw.Text = ""
+        txtrpw.Text = ""
+        txtpos.Text = ""
+        txtpriv.Text = ""
+        cbopriv.Text = ""
+    End Sub
+
+    Sub display()
+        Try
+            txteid.Text = dbds.Tables("tbluser").Rows(recpointer).Item("Employee ID")
+            txtuname.Text = dbds.Tables("tbluser").Rows(recpointer).Item("User Name")
+            txtpos.Text = dbds.Tables("tbluser").Rows(recpointer).Item("Position")
+            txtpriv.Text = dbds.Tables("tbluser").Rows(recpointer).Item("Privilege")
+        Catch ex As Exception
+
+        End Try
+    End Sub
+
+    Private Sub mnuclose_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles mnuclose.Click
+        If MsgBox("This action will close the current window? Would you like to proceed?", MsgBoxStyle.YesNo, "closing...") = MsgBoxResult.Yes Then
+
+            Dim counter As Integer
+
+            For counter = 90 To 10 Step -20
+                Me.Opacity = counter / 100
+                Me.Refresh()
+                Threading.Thread.Sleep(5)
+            Next counter
+            frmmain.mnu.Enabled = True
+
+            Me.Close()
+        Else
+            Me.Focus()
+        End If
+    End Sub
+
+    Private Sub cmdfirst_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles cmdfirst.Click
+        dguser.Rows(recpointer).Selected = False
+        recpointer = 0
+        dguser.Rows(recpointer).Selected = True
+        display()
+    End Sub
+
+    Private Sub cmdnext_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles cmdnext.Click
+        If recpointer < trec Then
+            dguser.Rows(recpointer).Selected = False
+            recpointer = recpointer + 1
+            dguser.Rows(recpointer).Selected = True
+            display()
+        End If
+    End Sub
+
+    Private Sub cmdprev_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles cmdprev.Click
+        If recpointer > 0 Then
+            dguser.Rows(recpointer).Selected = False
+            recpointer = recpointer - 1
+            dguser.Rows(recpointer).Selected = True
+            display()
+        End If
+    End Sub
+
+    Private Sub cmdlast_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles cmdlast.Click
+        dguser.Rows(recpointer).Selected = False
+        recpointer = trec
+        dguser.Rows(recpointer).Selected = True
+        display()
+    End Sub
+
+    Private Sub mnuuseradd_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles mnuuseradd.Click
+        sw = True
+        Unlock()
+        txtpriv.Visible = False
+        cbopriv.Visible = True
+        txteid.Focus()
+        dguser.Enabled = False
+        navlock()
+        itemsclear()
+
+    End Sub
+
+    Private Sub mnuuserdelete_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles mnuuserdelete.Click
+        If MsgBox("If you'll continue, then the records will permanently be deleted from it's database!", MsgBoxStyle.Critical + MsgBoxStyle.YesNo, "delete") = MsgBoxResult.Yes Then
+            db.Open()
+            dbcmd = New OleDb.OleDbCommand("DELETE FROM tbluser WHERE [Employee ID] like '" & txteid.Text.Trim & "'", db)
+            dbcmd.ExecuteNonQuery()
+            sqlqueryuser()
+            dguser.DataSource = dbds.Tables("tbluser")
+            itemsclear()
+        End If
+    End Sub
+
+    Private Sub mnuuserfind_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles mnuuserfind.Click
+        Dim x As String
+        x = InputBox("Enter User Name to Search : ")
+
+        If x.Length < 1 Then
+        Else
+            Try
+                tbluser = New OleDb.OleDbDataAdapter("SELECT * FROM tbluser WHERE [Employee ID] like '" & x.Trim & "'", db)
+                dbds = New DataSet
+                tbluser.Fill(dbds, "tbluser")
+                If dbds.Tables("tbluser").Rows.Count > 0 Then
+                    recpointer = 0
+                    trec = CInt(dbds.Tables("tbluser").Rows.Count) - 1
+                    dguser.DataSource = dbds.Tables("tbluser")
+
+                End If
+            Catch ex As Exception
+                MsgBox(Err.ToString)
+            Finally
+                db.Close()
+            End Try
+        End If
+    End Sub
+
+    Private Sub mnuusersave_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles mnuusersave.Click
+        If txtpw.Text.Trim = txtrpw.Text.Trim Then
+
+            If sw = True Then
+                If MsgBox("The data(s) are now being stored in the database...", MsgBoxStyle.DefaultButton1 + vbYesNo, "saving...") = MsgBoxResult.Yes Then
+                    db.Open()
+                    dbcmd = New OleDb.OleDbCommand("INSERT INTO tbluser([Employee ID],[User Name],[Password],[Position],[Privilege]) VALUES ('" & txteid.Text.Trim & "','" & txtuname.Text.Trim & "','" & txtpw.Text.Trim & "','" & txtpos.Text.Trim & "','" & cbopriv.Text.Trim & "')", db)
+                    dbcmd.ExecuteNonQuery()
+                    sqlqueryuser()
+                    lock()
+                   
+                    cbopriv.Visible = False
+                    txtpriv.Visible = True
+                    dguser.Enabled = True
+
+                    dguser.DataSource = dbds.Tables("tbluser")
+
+                Else
+                    txteid.Focus()
+                End If
+            End If
+
+            If sw = False Then
+                If MsgBox("Do you want to save the changes you made to its database?", MsgBoxStyle.DefaultButton1 + vbYesNo, "updating...") = MsgBoxResult.Yes Then
+                    db.Open()
+                    dbcmd = New OleDb.OleDbCommand("UPDATE tbluser SET [Password]= '" & txtpw.Text.Trim & "' WHERE [Employee ID]like '" & txteid.Text.Trim & "'", db)
+                    dbcmd.ExecuteNonQuery()
+                    sqlqueryuser()
+                    lock()
+                   
+                    dguser.Enabled = True
+
+                    dguser.DataSource = dbds.Tables("tbluser")
+                Else
+                    Me.Focus()
+
+                End If
+            End If
+        Else
+            MsgBox("Kindly re-type the password properly...!!", , "reminder!!!")
+            txtpw.Focus()
+            txtpw.Clear()
+            txtrpw.Clear()
+
+        End If
+    End Sub
+
+    Private Sub mnuusercancel_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles mnuusercancel.Click
+        lock()
+        cbopriv.Visible = False
+        txteid.Focus()
+        dguser.Enabled = True
+        navunlock()
+        dguser.Enabled = True
+        itemsclear()
+    End Sub
+
+    Private Sub mnuuseredit_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles mnuuseredit.Click
+        sw = False
+        txtpw.ReadOnly = False
+        txtrpw.ReadOnly = False
+        txtpw.Clear()
+        txtrpw.Clear()
+        dguser.Enabled = False
+        txtpw.Focus()
+    End Sub
+
+    Private Sub dguser_CellClick(ByVal sender As Object, ByVal e As System.Windows.Forms.DataGridViewCellEventArgs) Handles dguser.CellClick
+        recpointer = e.RowIndex
+        display()
+    End Sub
+
+    
+   
+End Class
