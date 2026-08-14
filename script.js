@@ -543,141 +543,6 @@ function parseCookies(cookieHeader) {
     return cookies;
   }
 
-  function createSessionToken() {
-    if (sessionSecret) {
-      return crypto
-        .createHmac('sha256', sessionSecret)
-        .update(`${Date.now()}:${crypto.randomBytes(24).toString('hex')}`)
-        .digest('hex');
-    }
-    return crypto.randomBytes(32).toString('hex');
-  }
-
-  function issueSessionCookie(res, token) {
-    const cookieParts = [
-      `${sessionCookieName}=${encodeURIComponent(token)}`,
-      'Path=/',
-      'HttpOnly',
-      'SameSite=Lax',
-      `Max-Age=${Math.floor(sessionDurationMs / 1000)}`,
-      isProduction ? 'Secure' : ''
-    ].filter(Boolean);
-    res.append('Set-Cookie', cookieParts.join('; '));
-  }
-
-  function clearSessionCookie(res) {
-    const cookieParts = [
-      `${sessionCookieName}=`,
-      'Path=/',
-      'HttpOnly',
-      'SameSite=Lax',
-      'Max-Age=0',
-      isProduction ? 'Secure' : ''
-    ].filter(Boolean);
-    res.append('Set-Cookie', cookieParts.join('; '));
-  }
-
-  function normalizeEmailList(list) {
-    if (!Array.isArray(list)) {
-      return [];
-    }
-
-    const valid = list
-      .map((entry) => (typeof entry === 'string' ? entry.trim().toLowerCase() : ''))
-      .filter((entry) => entry && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(entry));
-
-    return [...new Set(valid)];
-  }
-
-  function loadAdminAllowlist() {
-    const fallback = {
-      superAdmins: ['athrun.sison7@gmail.com'],
-      admins: ['athrun.sison7@gmail.com']
-    };
-
-    if (!fs.existsSync(adminAllowlistPath)) {
-      fs.writeFileSync(adminAllowlistPath, `${JSON.stringify(fallback, null, 2)}\n`, 'utf8');
-      return fallback;
-    }
-
-    try {
-      const raw = fs.readFileSync(adminAllowlistPath, 'utf8');
-      const parsed = JSON.parse(raw);
-      const superAdmins = normalizeEmailList(parsed.superAdmins);
-      const admins = normalizeEmailList(parsed.admins);
-      const mergedAdmins = [...new Set([...admins, ...superAdmins])];
-      const normalized = { superAdmins, admins: mergedAdmins };
-      return normalized;
-    } catch (error) {
-      console.error('[auth] Failed to read admin allowlist JSON, using fallback:', error.message);
-      return fallback;
-    }
-  }
-
-  function saveAdminAllowlist(nextAllowlist) {
-    const superAdmins = normalizeEmailList(nextAllowlist.superAdmins);
-    const admins = normalizeEmailList(nextAllowlist.admins);
-    const mergedAdmins = [...new Set([...admins, ...superAdmins])];
-    const payload = {
-      superAdmins,
-      admins: mergedAdmins
-    };
-    fs.writeFileSync(adminAllowlistPath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
-    return payload;
-  }
-
-  let adminAllowlist = loadAdminAllowlist();
-
-  function getSessionFromRequest(req) {
-    const cookies = parseCookies(req.get('Cookie') || '');
-    const token = (cookies[sessionCookieName] || '').trim();
-    if (!token) {
-      return null;
-    }
-
-    const session = sessions.get(token);
-    if (!session) {
-      return null;
-    }
-
-    if (session.expiresAt <= Date.now()) {
-      sessions.delete(token);
-      return null;
-    }
-
-    const normalizedEmail = (session.email || '').toLowerCase();
-    const isSuperAdmin = adminAllowlist.superAdmins.includes(normalizedEmail);
-    const isAdmin = isSuperAdmin || adminAllowlist.admins.includes(normalizedEmail);
-    const refreshed = {
-      ...session,
-      isAdmin,
-      isSuperAdmin
-    };
-    sessions.set(token, refreshed);
-
-    return { token, ...refreshed };
-  }
-
-  function buildAuthPayload(session) {
-    if (!session) {
-      return {
-        authenticated: false,
-        user: null
-      };
-    }
-
-    return {
-      authenticated: true,
-      user: {
-        email: session.email,
-        name: session.name,
-        picture: session.picture || '',
-        isAdmin: Boolean(session.isAdmin),
-        isSuperAdmin: Boolean(session.isSuperAdmin)
-      }
-    };
-  }
-
   cookieHeader.split(';').forEach((part) => {
     const index = part.indexOf('=');
     if (index === -1) {
@@ -694,6 +559,165 @@ function parseCookies(cookieHeader) {
   return cookies;
 }
 
+function createSessionToken() {
+  if (sessionSecret) {
+    return crypto
+      .createHmac('sha256', sessionSecret)
+      .update(`${Date.now()}:${crypto.randomBytes(24).toString('hex')}`)
+      .digest('hex');
+  }
+  return crypto.randomBytes(32).toString('hex');
+}
+
+function issueSessionCookie(res, token) {
+  const cookieParts = [
+    `${sessionCookieName}=${encodeURIComponent(token)}`,
+    'Path=/',
+    'HttpOnly',
+    'SameSite=Lax',
+    `Max-Age=${Math.floor(sessionDurationMs / 1000)}`,
+    isProduction ? 'Secure' : ''
+  ].filter(Boolean);
+  res.append('Set-Cookie', cookieParts.join('; '));
+}
+
+function clearSessionCookie(res) {
+  const cookieParts = [
+    `${sessionCookieName}=`,
+    'Path=/',
+    'HttpOnly',
+    'SameSite=Lax',
+    'Max-Age=0',
+    isProduction ? 'Secure' : ''
+  ].filter(Boolean);
+  res.append('Set-Cookie', cookieParts.join('; '));
+}
+
+function isValidEmailAddress(value) {
+  if (typeof value !== 'string') {
+    return false;
+  }
+
+  const email = value.trim().toLowerCase();
+  if (!email || email.length > 254 || email.includes(' ')) {
+    return false;
+  }
+
+  const atIndex = email.indexOf('@');
+  if (atIndex <= 0 || atIndex !== email.lastIndexOf('@')) {
+    return false;
+  }
+
+  const localPart = email.slice(0, atIndex);
+  const domainPart = email.slice(atIndex + 1);
+  if (!localPart || !domainPart || domainPart.startsWith('.') || domainPart.endsWith('.')) {
+    return false;
+  }
+
+  return domainPart.includes('.');
+}
+
+function normalizeEmailList(list) {
+  if (!Array.isArray(list)) {
+    return [];
+  }
+
+  const valid = list
+    .map((entry) => (typeof entry === 'string' ? entry.trim().toLowerCase() : ''))
+    .filter((entry) => isValidEmailAddress(entry));
+
+  return [...new Set(valid)];
+}
+
+function loadAdminAllowlist() {
+  const fallback = {
+    superAdmins: ['athrun.sison7@gmail.com'],
+    admins: ['athrun.sison7@gmail.com']
+  };
+
+  if (!fs.existsSync(adminAllowlistPath)) {
+    fs.writeFileSync(adminAllowlistPath, `${JSON.stringify(fallback, null, 2)}\n`, 'utf8');
+    return fallback;
+  }
+
+  try {
+    const raw = fs.readFileSync(adminAllowlistPath, 'utf8');
+    const parsed = JSON.parse(raw);
+    const superAdmins = normalizeEmailList(parsed.superAdmins);
+    const admins = normalizeEmailList(parsed.admins);
+    const mergedAdmins = [...new Set([...admins, ...superAdmins])];
+    const normalized = { superAdmins, admins: mergedAdmins };
+    return normalized;
+  } catch (error) {
+    console.error('[auth] Failed to read admin allowlist JSON, using fallback:', error.message);
+    return fallback;
+  }
+}
+
+function saveAdminAllowlist(nextAllowlist) {
+  const superAdmins = normalizeEmailList(nextAllowlist.superAdmins);
+  const admins = normalizeEmailList(nextAllowlist.admins);
+  const mergedAdmins = [...new Set([...admins, ...superAdmins])];
+  const payload = {
+    superAdmins,
+    admins: mergedAdmins
+  };
+  fs.writeFileSync(adminAllowlistPath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
+  return payload;
+}
+
+let adminAllowlist = loadAdminAllowlist();
+
+function getSessionFromRequest(req) {
+  const cookies = parseCookies(req.get('Cookie') || '');
+  const token = (cookies[sessionCookieName] || '').trim();
+  if (!token) {
+    return null;
+  }
+
+  const session = sessions.get(token);
+  if (!session) {
+    return null;
+  }
+
+  if (session.expiresAt <= Date.now()) {
+    sessions.delete(token);
+    return null;
+  }
+
+  const normalizedEmail = (session.email || '').toLowerCase();
+  const isSuperAdmin = adminAllowlist.superAdmins.includes(normalizedEmail);
+  const isAdmin = isSuperAdmin || adminAllowlist.admins.includes(normalizedEmail);
+  const refreshed = {
+    ...session,
+    isAdmin,
+    isSuperAdmin
+  };
+  sessions.set(token, refreshed);
+
+  return { token, ...refreshed };
+}
+
+function buildAuthPayload(session) {
+  if (!session) {
+    return {
+      authenticated: false,
+      user: null
+    };
+  }
+
+  return {
+    authenticated: true,
+    user: {
+      email: session.email,
+      name: session.name,
+      picture: session.picture || '',
+      isAdmin: Boolean(session.isAdmin),
+      isSuperAdmin: Boolean(session.isSuperAdmin)
+    }
+  };
+}
+
 function issueCsrfToken(res) {
   const token = crypto.randomBytes(32).toString('hex');
   const cookieParts = [
@@ -703,7 +727,7 @@ function issueCsrfToken(res) {
     isProduction ? 'Secure' : ''
   ].filter(Boolean);
 
-  res.setHeader('Set-Cookie', cookieParts.join('; '));
+  res.append('Set-Cookie', cookieParts.join('; '));
   return token;
 }
 
@@ -1238,7 +1262,7 @@ app.post('/api/auth/google', writeLimiter, async (req, res) => {
 
     if (enableGoogleAuthTestBypass && credential.startsWith('test:')) {
       const candidateEmail = credential.slice('test:'.length).trim().toLowerCase();
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(candidateEmail)) {
+      if (!isValidEmailAddress(candidateEmail)) {
         return res.status(400).json({ error: 'Invalid test credential email format' });
       }
       email = candidateEmail;
