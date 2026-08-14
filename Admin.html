@@ -5,21 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>FoundU Admin Board</title>
   <link rel="stylesheet" href="admin.css">
-  <script>
-    (function enforceAdminLoginGate() {
-      const ADMIN_ACCESS_KEY = 'founduAdminAccessGranted';
-      const ADMIN_ACCESS_TS_KEY = 'founduAdminAccessTimestamp';
-      const ADMIN_ACCESS_DURATION_MS = 8 * 60 * 60 * 1000;
-
-      const granted = sessionStorage.getItem(ADMIN_ACCESS_KEY) === '1';
-      const timestamp = Number(localStorage.getItem(ADMIN_ACCESS_TS_KEY) || '0');
-      const stillValid = Number.isFinite(timestamp) && (Date.now() - timestamp) <= ADMIN_ACCESS_DURATION_MS;
-
-      if (!granted || !stillValid) {
-        window.location.replace('Login.html');
-      }
-    })();
-  </script>
 </head>
 <body  oncontextmenu="return false;">
   <div class="bg-orb orb-one" aria-hidden="true"></div>
@@ -35,6 +20,9 @@
       <button class="tab-btn" onclick="window.location.href='index.html'" style="margin-right:16px;">
         <i class="fas fa-home" style="margin-right:6px;"></i>Home
       </button>
+      <a id="superAdminLink" class="tab-btn" href="SuperAdmin.html" style="margin-right:10px;display:none;">Allowlist</a>
+      <button id="logoutBtn" class="tab-btn" type="button" style="margin-right:10px;">Logout</button>
+      <p id="adminUserBadge" class="live-chip" style="margin-right:10px;">Guest</p>
       <p class="live-chip">System Online</p>
     <nav class="tabs">
       <button class="tab-btn active" data-section="items" onclick="showSection('items')">Items</button>

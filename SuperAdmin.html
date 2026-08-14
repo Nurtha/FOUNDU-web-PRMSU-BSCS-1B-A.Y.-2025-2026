@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FoundU Super Admin</title>
+  <link rel="stylesheet" href="super-admin.css">
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <h1>Super Admin Allowlist</h1>
+      <div class="actions">
+        <button id="backBtn" type="button">Back to Admin</button>
+        <button id="logoutBtn" type="button">Logout</button>
+      </div>
+    </header>
+
+    <section class="card">
+      <p id="userInfo" class="meta">Checking session...</p>
+      <p class="hint">Edit JSON values below. One email per line.</p>
+
+      <div class="grid">
+        <label for="adminsInput">Admin emails</label>
+        <textarea id="adminsInput" rows="8" placeholder="admin@example.com"></textarea>
+
+        <label for="superAdminsInput">Super-admin emails</label>
+        <textarea id="superAdminsInput" rows="6" placeholder="superadmin@example.com"></textarea>
+      </div>
+
+      <div class="actions bottom">
+        <button id="reloadBtn" type="button">Reload</button>
+        <button id="saveBtn" type="button">Save Allowlist</button>
+      </div>
+      <p id="message" class="meta"></p>
+    </section>
+  </main>
+
+  <script src="super-admin.js"></script>
+</body>
+</html>
