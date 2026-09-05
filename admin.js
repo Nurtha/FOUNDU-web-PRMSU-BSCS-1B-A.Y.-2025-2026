@@ -4,38 +4,11 @@ let matches = [];
 let samaritans = [];
 let API_BASE = '';
 let CSRF_TOKEN = '';
-let ADMIN_API_KEY = 'key';
+let CURRENT_USER = null;
 let adminLiveRefreshTimerId = null;
 let isAdminRefreshing = false;
 const API_BASE_STORAGE_KEY = 'founduApiBase';
-const ADMIN_KEY_STORAGE_KEY = 'founduAdminApiKey';
-const ADMIN_KEY_COOKIE_NAME = 'foundu_admin_api_key';
-const ADMIN_KEY_COOKIE_DAYS = 30;
 const PIE_COLORS = ['#1f77ff', '#e53935', '#2bb673', '#f0b429', '#7e57c2', '#00a8a8', '#ff7f50', '#546e7a'];
-
-function setCookie(name, value, days = 30) {
-  const expires = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toUTCString();
-  const secure = window.location.protocol === 'https:' ? '; Secure' : '';
-  document.cookie = `${encodeURIComponent(name)}=${encodeURIComponent(value)}; expires=${expires}; path=/; SameSite=Lax${secure}`;
-}
-
-function getCookie(name) {
-  const encodedName = `${encodeURIComponent(name)}=`;
-  const cookies = document.cookie ? document.cookie.split('; ') : [];
-
-  for (const cookie of cookies) {
-    if (cookie.startsWith(encodedName)) {
-      return decodeURIComponent(cookie.slice(encodedName.length));
-    }
-  }
-
-  return '';
-}
-
-function deleteCookie(name) {
-  const secure = window.location.protocol === 'https:' ? '; Secure' : '';
-  document.cookie = `${encodeURIComponent(name)}=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/; SameSite=Lax${secure}`;
-}
 
 function showTextInputDialog(options = {}) {
   const {
@@ -242,57 +215,57 @@ async function fetchCsrfToken() {
   }
 }
 
-async function loadAdminApiKey() {
-  const urlParams = new URLSearchParams(window.location.search);
-  const fromUrl = (urlParams.get('adminKey') || urlParams.get('key') || '').trim();
-  const fromCookie = getCookie(ADMIN_KEY_COOKIE_NAME).trim();
-  const fromStorage = (localStorage.getItem(ADMIN_KEY_STORAGE_KEY) || '').trim();
-  const saved = fromUrl || fromCookie || fromStorage;
+async function fetchCurrentUser() {
+  const response = await fetch(`${API_BASE}/api/auth/me`, {
+    credentials: 'include'
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to fetch current user (${response.status})`);
+  }
 
-  if (saved) {
-    ADMIN_API_KEY = saved;
-    localStorage.setItem(ADMIN_KEY_STORAGE_KEY, saved);
-    if (!fromCookie) {
-      setCookie(ADMIN_KEY_COOKIE_NAME, saved, ADMIN_KEY_COOKIE_DAYS);
-    }
+  const payload = await response.json();
+  if (!payload.authenticated || !payload.user) {
+    return null;
+  }
+
+  return payload.user;
+}
+
+function updateAdminHeader(user) {
+  const badge = document.getElementById('adminUserBadge');
+  if (badge) {
+    badge.textContent = user?.email || 'Guest';
+  }
+
+  const superAdminLink = document.getElementById('superAdminLink');
+  if (superAdminLink) {
+    superAdminLink.style.display = user?.isSuperAdmin ? 'inline-flex' : 'none';
+  }
+}
+
+function bindLogoutButton() {
+  const button = document.getElementById('logoutBtn');
+  if (!button) {
     return;
   }
 
-  const provided = await showTextInputDialog({
-    title: 'Admin API Key Required',
-    message: `Enter admin API key for ${API_BASE || 'this server'}.`,
-    placeholder: 'Admin API key',
-    confirmText: 'Continue',
-    required: true,
-    secret: true
+  button.addEventListener('click', async () => {
+    try {
+      await fetch(`${API_BASE}/api/auth/logout`, {
+        method: 'POST',
+        credentials: 'include'
+      });
+    } catch (error) {
+      console.warn('[admin] Logout request failed:', error);
+    } finally {
+      window.location.replace('Login.html');
+    }
   });
-
-  if (provided === null) {
-    throw new Error('Admin API key is required');
-  }
-
-  ADMIN_API_KEY = provided.trim();
-  if (!ADMIN_API_KEY) {
-    throw new Error('Admin API key is required');
-  }
-
-  localStorage.setItem(ADMIN_KEY_STORAGE_KEY, ADMIN_API_KEY);
-  setCookie(ADMIN_KEY_COOKIE_NAME, ADMIN_API_KEY, ADMIN_KEY_COOKIE_DAYS);
-}
-
-function clearAdminApiKey() {
-  ADMIN_API_KEY = '';
-  localStorage.removeItem(ADMIN_KEY_STORAGE_KEY);
-  deleteCookie(ADMIN_KEY_COOKIE_NAME);
 }
 
 async function apiFetch(path, options = {}) {
   const method = (options.method || 'GET').toUpperCase();
   const headers = { ...(options.headers || {}) };
-
-  if (path.startsWith('/api/admin')) {
-    headers['X-Admin-Key'] = ADMIN_API_KEY;
-  }
 
   if (!['GET', 'HEAD', 'OPTIONS'].includes(method)) {
     headers['X-CSRF-Token'] = CSRF_TOKEN;
@@ -974,7 +947,10 @@ async function fetchAdminItems() {
   const response = await apiFetch('/api/admin/items');
   if (!response.ok) {
     if (response.status === 401) {
-      throw new Error(`Unauthorized admin key (401) for ${API_BASE}`);
+      throw new Error(`Authentication required (401) for ${API_BASE}`);
+    }
+    if (response.status === 403) {
+      throw new Error(`Admin access denied (403) for ${API_BASE}`);
     }
 
     throw new Error(`Failed to fetch admin items (${response.status})`);
@@ -990,7 +966,10 @@ async function fetchClaimRequests() {
   const response = await apiFetch('/api/admin/claims');
   if (!response.ok) {
     if (response.status === 401) {
-      throw new Error(`Unauthorized admin key (401) for ${API_BASE}`);
+      throw new Error(`Authentication required (401) for ${API_BASE}`);
+    }
+    if (response.status === 403) {
+      throw new Error(`Admin access denied (403) for ${API_BASE}`);
     }
 
     throw new Error(`Failed to fetch claim requests (${response.status})`);
@@ -1006,7 +985,10 @@ async function fetchAdminMatches() {
   const response = await apiFetch('/api/admin/matches');
   if (!response.ok) {
     if (response.status === 401) {
-      throw new Error(`Unauthorized admin key (401) for ${API_BASE}`);
+      throw new Error(`Authentication required (401) for ${API_BASE}`);
+    }
+    if (response.status === 403) {
+      throw new Error(`Admin access denied (403) for ${API_BASE}`);
     }
 
     throw new Error(`Failed to fetch detected matches (${response.status})`);
@@ -1021,7 +1003,10 @@ async function fetchAdminSamaritans() {
   const response = await apiFetch('/api/admin/good-samaritans');
   if (!response.ok) {
     if (response.status === 401) {
-      throw new Error(`Unauthorized admin key (401) for ${API_BASE}`);
+      throw new Error(`Authentication required (401) for ${API_BASE}`);
+    }
+    if (response.status === 403) {
+      throw new Error(`Admin access denied (403) for ${API_BASE}`);
     }
 
     console.warn(`[admin] Good Samaritan entries unavailable (${response.status}).`);
@@ -1499,7 +1484,18 @@ function showSection(sectionId) {
 window.onload = async () => {
   try {
     await resolveApiBase();
-    await loadAdminApiKey();
+    CURRENT_USER = await fetchCurrentUser();
+    if (!CURRENT_USER) {
+      window.location.replace('Login.html');
+      return;
+    }
+    if (!CURRENT_USER.isAdmin) {
+      alert('Signed in successfully, but this account is not allowed to access the admin panel.');
+      window.location.replace('Login.html?denied=1');
+      return;
+    }
+    updateAdminHeader(CURRENT_USER);
+    bindLogoutButton();
     await fetchCsrfToken();
     bindSamaritanForm();
     await fetchAdminItems();
@@ -1508,29 +1504,8 @@ window.onload = async () => {
     await fetchAdminSamaritans();
     startAdminLiveRefresh();
   } catch (error) {
-    const isUnauthorized = /\(401\)|Unauthorized admin key/i.test(error.message || '');
-
-    if (isUnauthorized) {
-      try {
-        clearAdminApiKey();
-        alert(`Admin key was rejected by ${API_BASE}. Please enter it again.`);
-        await loadAdminApiKey();
-        await fetchCsrfToken();
-        bindSamaritanForm();
-        await fetchAdminItems();
-        await fetchClaimRequests();
-        await fetchAdminMatches();
-        await fetchAdminSamaritans();
-        startAdminLiveRefresh();
-        return;
-      } catch (retryError) {
-        console.error('[admin] Startup retry failed:', retryError);
-        alert(`Startup failed after retry: ${retryError.message}`);
-        return;
-      }
-    }
-
     console.error('[admin] Startup failed:', error);
     alert(`Startup failed: ${error.message}`);
+    window.location.replace('Login.html');
   }
 };

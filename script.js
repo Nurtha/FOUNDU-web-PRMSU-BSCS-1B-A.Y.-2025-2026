@@ -1,20 +1,92 @@
 const express = require('express');
+const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const helmet = require('helmet');
 const hpp = require('hpp');
 const rateLimit = require('express-rate-limit');
+const { OAuth2Client } = require('google-auth-library');
+
+// Minimal .env loader so `npm run start` picks up the same file Start.sh uses.
+// Values already present in the real environment always win.
+(function loadDotEnvFile() {
+  try {
+    const envPath = path.join(__dirname, '.env');
+    if (!fs.existsSync(envPath)) {
+      return;
+    }
+
+    const lines = fs.readFileSync(envPath, 'utf8').split(/\r?\n/);
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) {
+        continue;
+      }
+
+      const separator = trimmed.indexOf('=');
+      if (separator === -1) {
+        continue;
+      }
+
+      const key = trimmed.slice(0, separator).trim();
+      let value = trimmed.slice(separator + 1).trim();
+      if (
+        (value.startsWith('"') && value.endsWith('"')) ||
+        (value.startsWith("'") && value.endsWith("'"))
+      ) {
+        value = value.slice(1, -1);
+      }
+
+      if (key && process.env[key] === undefined) {
+        process.env[key] = value;
+      }
+    }
+  } catch (error) {
+    console.warn('[startup] Could not read .env file:', error.message);
+  }
+})();
 
 const app = express();
 const port = 3000;
 const isProduction = process.env.NODE_ENV === 'production';
-const adminApiKey = (process.env.ADMIN_API_KEY || '').trim();
 const corsAllowlist = (process.env.CORS_ORIGINS || '')
   .split(',')
   .map((origin) => origin.trim())
   .filter(Boolean);
+const googleClientId = (process.env.GOOGLE_CLIENT_ID || '').trim();
+const enableGoogleAuthTestBypass = process.env.GOOGLE_AUTH_TEST_BYPASS === '1';
+const sessionSecret = (process.env.SESSION_SECRET || '').trim();
+const sessionDurationMs = 8 * 60 * 60 * 1000;
+const sessionCookieName = 'foundu_session';
+const sessions = new Map();
+
+// Sweep expired sessions so the in-memory store cannot grow forever.
+setInterval(() => {
+  const now = Date.now();
+  for (const [token, session] of sessions) {
+    if (!session || session.expiresAt <= now) {
+      sessions.delete(token);
+    }
+  }
+}, 30 * 60 * 1000).unref();
+const oauthClient = googleClientId ? new OAuth2Client(googleClientId) : null;
+const adminAllowlistPath = path.join(__dirname, 'admin-allowlist.json');
 
 console.log('[startup] Initializing server...');
+
+if (!googleClientId) {
+  console.warn(
+    '[auth] GOOGLE_CLIENT_ID is not set. Google sign-in is DISABLED until you add it to .env (or your environment).'
+  );
+}
+if (!sessionSecret) {
+  console.warn('[auth] SESSION_SECRET is not set. Consider adding a random value to .env for stronger sessions.');
+}
+if (isProduction && corsAllowlist.length === 0) {
+  console.warn(
+    '[auth] NODE_ENV=production but CORS_ORIGINS is empty. Browser pages served from other origins will be rejected. Set CORS_ORIGINS=https://your-frontend-origin (comma separated).'
+  );
+}
 
 const allowedItemTypes = new Set(['lost', 'found']);
 const allowedCategories = new Set(['electronics', 'pets', 'keys', 'other']);
@@ -550,16 +622,211 @@ function parseCookies(cookieHeader) {
   return cookies;
 }
 
-function issueCsrfToken(res) {
+function createSessionToken() {
+  if (sessionSecret) {
+    return crypto
+      .createHmac('sha256', sessionSecret)
+      .update(`${Date.now()}:${crypto.randomBytes(24).toString('hex')}`)
+      .digest('hex');
+  }
+  return crypto.randomBytes(32).toString('hex');
+}
+
+function getRequestCookieAttributes(req) {
+  const forwardedProto = (req.get('x-forwarded-proto') || '').split(',')[0].trim().toLowerCase();
+  const isSecureRequest = req.secure || forwardedProto === 'https';
+  const secure = isSecureRequest || isProduction;
+
+  // Cookies must be SameSite=None (plus Secure) to survive cross-site
+  // fetches with credentials, e.g. a frontend on GitHub Pages talking to an
+  // API on another domain. Otherwise Lax is enough and safer.
+  let crossSite = false;
+  const originHeader = (req.get('Origin') || '').trim();
+  const hostHeader = (req.get('x-forwarded-host') || req.get('Host') || '').split(',')[0].trim().toLowerCase();
+  if (originHeader && hostHeader) {
+    try {
+      const originHostname = new URL(originHeader).hostname.toLowerCase();
+      const requestHostname = hostHeader.split(':')[0];
+      crossSite = Boolean(originHostname) && originHostname !== requestHostname;
+    } catch (_) {
+      crossSite = false;
+    }
+  }
+
+  const sameSite = crossSite && secure ? 'None' : 'Lax';
+  return { secure, sameSite };
+}
+
+function appendCookie(req, res, cookieParts) {
+  res.append('Set-Cookie', cookieParts.join('; '));
+}
+
+function issueSessionCookie(req, res, token) {
+  const { secure, sameSite } = getRequestCookieAttributes(req);
+  const cookieParts = [
+    `${sessionCookieName}=${encodeURIComponent(token)}`,
+    'Path=/',
+    'HttpOnly',
+    `SameSite=${sameSite}`,
+    `Max-Age=${Math.floor(sessionDurationMs / 1000)}`,
+    secure ? 'Secure' : ''
+  ].filter(Boolean);
+  appendCookie(req, res, cookieParts);
+}
+
+function clearSessionCookie(req, res) {
+  const { secure, sameSite } = getRequestCookieAttributes(req);
+  const cookieParts = [
+    `${sessionCookieName}=`,
+    'Path=/',
+    'HttpOnly',
+    `SameSite=${sameSite}`,
+    'Max-Age=0',
+    secure ? 'Secure' : ''
+  ].filter(Boolean);
+  appendCookie(req, res, cookieParts);
+}
+
+function isValidEmailAddress(value) {
+  if (typeof value !== 'string') {
+    return false;
+  }
+
+  const email = value.trim().toLowerCase();
+  if (!email || email.length > 254 || email.includes(' ')) {
+    return false;
+  }
+
+  const atIndex = email.indexOf('@');
+  if (atIndex <= 0 || atIndex !== email.lastIndexOf('@')) {
+    return false;
+  }
+
+  const localPart = email.slice(0, atIndex);
+  const domainPart = email.slice(atIndex + 1);
+  if (!localPart || !domainPart || domainPart.startsWith('.') || domainPart.endsWith('.')) {
+    return false;
+  }
+
+  return domainPart.includes('.');
+}
+
+function normalizeEmailList(list) {
+  if (!Array.isArray(list)) {
+    return [];
+  }
+
+  const valid = list
+    .map((entry) => (typeof entry === 'string' ? entry.trim().toLowerCase() : ''))
+    .filter((entry) => isValidEmailAddress(entry));
+
+  return [...new Set(valid)];
+}
+
+function loadAdminAllowlist() {
+  const fallback = {
+    superAdmins: ['athrun.sison7@gmail.com'],
+    admins: ['athrun.sison7@gmail.com']
+  };
+
+  if (!fs.existsSync(adminAllowlistPath)) {
+    fs.writeFileSync(adminAllowlistPath, `${JSON.stringify(fallback, null, 2)}\n`, 'utf8');
+    return fallback;
+  }
+
+  try {
+    const raw = fs.readFileSync(adminAllowlistPath, 'utf8');
+    const parsed = JSON.parse(raw);
+    const superAdmins = normalizeEmailList(parsed.superAdmins);
+    const admins = normalizeEmailList(parsed.admins);
+    const mergedAdmins = [...new Set([...admins, ...superAdmins])];
+    const normalized = { superAdmins, admins: mergedAdmins };
+    return normalized;
+  } catch (error) {
+    console.error('[auth] Failed to read admin allowlist JSON, using fallback:', error.message);
+    return fallback;
+  }
+}
+
+function saveAdminAllowlist(nextAllowlist) {
+  const superAdmins = normalizeEmailList(nextAllowlist.superAdmins);
+  const admins = normalizeEmailList(nextAllowlist.admins);
+  const mergedAdmins = [...new Set([...admins, ...superAdmins])];
+  const payload = {
+    superAdmins,
+    admins: mergedAdmins
+  };
+  fs.writeFileSync(adminAllowlistPath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
+  return payload;
+}
+
+let adminAllowlist = loadAdminAllowlist();
+
+function getSessionFromRequest(req) {
+  const cookies = parseCookies(req.get('Cookie') || '');
+  const token = (cookies[sessionCookieName] || '').trim();
+  if (!token) {
+    return null;
+  }
+
+  const session = sessions.get(token);
+  if (!session) {
+    return null;
+  }
+
+  if (session.expiresAt <= Date.now()) {
+    sessions.delete(token);
+    return null;
+  }
+
+  const normalizedEmail = (session.email || '').toLowerCase();
+  const isSuperAdmin = adminAllowlist.superAdmins.includes(normalizedEmail);
+  const isAdmin = isSuperAdmin || adminAllowlist.admins.includes(normalizedEmail);
+  const refreshed = {
+    ...session,
+    isAdmin,
+    isSuperAdmin
+  };
+  sessions.set(token, refreshed);
+
+  return { token, ...refreshed };
+}
+
+function buildAuthPayload(session) {
+  if (!session) {
+    return {
+      authenticated: false,
+      user: null
+    };
+  }
+
+  return {
+    authenticated: true,
+    user: {
+      email: session.email,
+      name: session.name,
+      picture: session.picture || '',
+      isAdmin: Boolean(session.isAdmin),
+      isSuperAdmin: Boolean(session.isSuperAdmin)
+    }
+  };
+}
+
+function issueCsrfToken(req, res) {
+  const { secure, sameSite } = getRequestCookieAttributes(req);
   const token = crypto.randomBytes(32).toString('hex');
   const cookieParts = [
     `foundu_csrf=${encodeURIComponent(token)}`,
     'Path=/',
-    'SameSite=Strict',
-    isProduction ? 'Secure' : ''
+    // SameSite must match the session cookie so the token is actually sent
+    // back on cross-site writes. CSRF protection still holds because the
+    // token must also be echoed in the X-CSRF-Token header, which a
+    // cross-site attacker cannot read.
+    `SameSite=${sameSite === 'None' ? 'None' : 'Strict'}`,
+    secure ? 'Secure' : ''
   ].filter(Boolean);
 
-  res.setHeader('Set-Cookie', cookieParts.join('; '));
+  res.append('Set-Cookie', cookieParts.join('; '));
   return token;
 }
 
@@ -586,16 +853,41 @@ function requireCsrf(req, res, next) {
   next();
 }
 
-function requireAdminKey(req, res, next) {
-  if (!adminApiKey) {
-    return res.status(503).json({ error: 'Admin API key is not configured on the server' });
+function requireAuthenticatedSession(req, res, next) {
+  const session = getSessionFromRequest(req);
+  if (!session) {
+    return res.status(401).json({ error: 'Authentication required' });
   }
 
-  const providedKey = (req.get('X-Admin-Key') || '').trim();
-  if (providedKey !== adminApiKey) {
-    return res.status(401).json({ error: 'Unauthorized admin request' });
+  req.authSession = session;
+  next();
+}
+
+function requireAdminSession(req, res, next) {
+  const session = getSessionFromRequest(req);
+  if (!session) {
+    return res.status(401).json({ error: 'Authentication required' });
   }
 
+  if (!session.isAdmin) {
+    return res.status(403).json({ error: 'Admin access denied' });
+  }
+
+  req.authSession = session;
+  next();
+}
+
+function requireSuperAdminSession(req, res, next) {
+  const session = getSessionFromRequest(req);
+  if (!session) {
+    return res.status(401).json({ error: 'Authentication required' });
+  }
+
+  if (!session.isSuperAdmin) {
+    return res.status(403).json({ error: 'Super-admin access denied' });
+  }
+
+  req.authSession = session;
   next();
 }
 
@@ -605,7 +897,8 @@ app.set('trust proxy', 1);
 app.use(
   helmet({
     contentSecurityPolicy: false,
-    crossOriginEmbedderPolicy: false
+    crossOriginEmbedderPolicy: false,
+    crossOriginOpenerPolicy: { policy: 'same-origin-allow-popups' }
   })
 );
 app.use(hpp());
@@ -641,7 +934,7 @@ app.use((req, res, next) => {
 
   res.setHeader('Vary', 'Origin');
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PATCH,DELETE,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-CSRF-Token, X-Admin-Key');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-CSRF-Token');
 
   if (req.method === 'OPTIONS') {
     if (!isOriginAllowed(requestOrigin)) {
@@ -658,7 +951,7 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use('/api/admin', requireAdminKey);
+app.use('/api/admin', requireAdminSession);
 
 const db = createDatabase((err) => {
   if (err) {
@@ -1040,10 +1333,120 @@ app.get('/api/health', (req, res) => {
   res.json({ ok: true });
 });
 
+app.get('/api/auth/config', (req, res) => {
+  res.json({
+    googleClientId,
+    googleEnabled: Boolean(googleClientId)
+  });
+});
+
+app.get('/api/auth/me', (req, res) => {
+  const session = getSessionFromRequest(req);
+  res.json(buildAuthPayload(session));
+});
+
+app.post('/api/auth/google', writeLimiter, async (req, res) => {
+  if (!googleClientId && !enableGoogleAuthTestBypass) {
+    return res.status(503).json({ error: 'Google auth is not configured on the server' });
+  }
+
+  const credential = (req.body?.credential || '').toString().trim();
+  if (!credential) {
+    return res.status(400).json({ error: 'Missing Google credential' });
+  }
+
+  try {
+    let email = '';
+    let name = '';
+    let picture = '';
+
+    if (enableGoogleAuthTestBypass && credential.startsWith('test:')) {
+      const candidateEmail = credential.slice('test:'.length).trim().toLowerCase();
+      if (!isValidEmailAddress(candidateEmail)) {
+        return res.status(400).json({ error: 'Invalid test credential email format' });
+      }
+      email = candidateEmail;
+      name = candidateEmail.split('@')[0];
+    } else {
+      if (!oauthClient || !googleClientId) {
+        return res.status(503).json({ error: 'Google auth is not configured on the server' });
+      }
+      const ticket = await oauthClient.verifyIdToken({
+        idToken: credential,
+        audience: googleClientId
+      });
+      const payload = ticket.getPayload();
+      email = (payload?.email || '').toLowerCase();
+      name = (payload?.name || '').trim();
+      picture = (payload?.picture || '').trim();
+
+      if (!email || !payload?.email_verified) {
+        return res.status(401).json({ error: 'Google account email is not verified' });
+      }
+    }
+
+    const isSuperAdmin = adminAllowlist.superAdmins.includes(email);
+    const isAdmin = isSuperAdmin || adminAllowlist.admins.includes(email);
+    const token = createSessionToken();
+    sessions.set(token, {
+      email,
+      name,
+      picture,
+      isAdmin,
+      isSuperAdmin,
+      expiresAt: Date.now() + sessionDurationMs
+    });
+    issueSessionCookie(req, res, token);
+    const csrfToken = issueCsrfToken(req, res);
+
+    return res.json({
+      authenticated: true,
+      user: { email, name, picture, isAdmin, isSuperAdmin },
+      csrfToken
+    });
+  } catch (error) {
+    console.error('[auth] Google token verification failed:', error.message);
+    return res.status(401).json({ error: 'Google sign-in failed' });
+  }
+});
+
+app.post('/api/auth/logout', (req, res) => {
+  const cookies = parseCookies(req.get('Cookie') || '');
+  const token = (cookies[sessionCookieName] || '').trim();
+  if (token) {
+    sessions.delete(token);
+  }
+
+  clearSessionCookie(req, res);
+  res.json({ ok: true });
+});
+
 app.get('/api/csrf-token', (req, res) => {
   const cookies = parseCookies(req.get('Cookie') || '');
-  const token = cookies.foundu_csrf || issueCsrfToken(res);
+  const token = cookies.foundu_csrf || issueCsrfToken(req, res);
   res.json({ token });
+});
+
+app.get('/api/admin/allowlist', requireSuperAdminSession, (req, res) => {
+  adminAllowlist = loadAdminAllowlist();
+  res.json({
+    data: {
+      admins: adminAllowlist.admins,
+      superAdmins: adminAllowlist.superAdmins
+    }
+  });
+});
+
+app.put('/api/admin/allowlist', writeLimiter, requireCsrf, requireSuperAdminSession, (req, res) => {
+  const updated = saveAdminAllowlist({
+    admins: req.body?.admins,
+    superAdmins: req.body?.superAdmins
+  });
+  adminAllowlist = updated;
+  res.json({
+    message: 'Allowlist updated',
+    data: updated
+  });
 });
 
 app.get('/api/admin/items', (req, res) => {
@@ -2641,7 +3044,7 @@ app.patch('/api/admin/claims/:id/reject', writeLimiter, requireCsrf, (req, res) 
   });
 });
 
-app.delete('/api/admin/claims/history', writeLimiter, requireCsrf, requireAdminKey, (req, res) => {
+app.delete('/api/admin/claims/history', writeLimiter, requireCsrf, (req, res) => {
   const sql = "DELETE FROM claim_requests WHERE status != 'pending'";
 
   db.run(sql, [], function onClearHistory(err) {

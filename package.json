@@ -22,11 +22,12 @@
   },
   "homepage": "https://github.com/Nurtha/Nurtha#readme",
   "dependencies": {
+    "@libsql/client": "^0.15.15",
     "express": "^5.2.1",
     "express-rate-limit": "^8.3.1",
+    "google-auth-library": "^11.0.2",
     "helmet": "^8.1.0",
     "hpp": "^0.2.3",
-    "@libsql/client": "^0.15.15",
     "sqlite3": "^6.0.1"
   }
 }

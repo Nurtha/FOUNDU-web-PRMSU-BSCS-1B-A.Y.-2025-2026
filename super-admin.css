@@ -1,0 +1,74 @@
+:root {
+  color-scheme: light;
+}
+
+body {
+  margin: 0;
+  font-family: Inter, system-ui, -apple-system, Segoe UI, sans-serif;
+  background: #f3f6fb;
+  color: #1f2937;
+}
+
+.shell {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+.topbar,
+.actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.card {
+  margin-top: 18px;
+  background: #fff;
+  border-radius: 14px;
+  border: 1px solid #dbe6f3;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+  padding: 18px;
+}
+
+.grid {
+  display: grid;
+  gap: 10px;
+}
+
+textarea {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  padding: 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+button {
+  border: 1px solid #cbd5e1;
+  background: #fff;
+  padding: 10px 14px;
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+button#saveBtn {
+  background: #1f77ff;
+  color: #fff;
+  border-color: #1f77ff;
+}
+
+.meta {
+  color: #475569;
+}
+
+.hint {
+  margin-top: 0;
+  color: #64748b;
+}
+
+.bottom {
+  margin-top: 14px;
+}
