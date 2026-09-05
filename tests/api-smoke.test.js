@@ -97,3 +97,67 @@ test('super-admin can read allowlist endpoint', { skip: !ENABLE_GOOGLE_BYPASS_TE
   });
   assert.equal(response.status, 200);
 });
+
+test('auth config exposes google client id when set', async () => {
+  const response = await fetch(`${BASE_URL}/api/auth/config`);
+  assert.equal(response.status, 200);
+
+  const payload = await response.json();
+  assert.equal(typeof payload.googleEnabled, 'boolean');
+  assert.equal(typeof payload.googleClientId, 'string');
+});
+
+function getSetCookies(response) {
+  if (typeof response.headers.getSetCookie === 'function') {
+    return response.headers.getSetCookie();
+  }
+  return (response.headers.get('set-cookie') || '').split(/(?<!Expires=[A-Za-z]{3},) ,/);
+}
+
+test('same-origin login keeps SameSite=Lax cookie over http', { skip: !ENABLE_GOOGLE_BYPASS_TESTS }, async () => {
+  const response = await fetch(`${BASE_URL}/api/auth/google`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ credential: 'test:athrun.sison7@gmail.com' })
+  });
+  assert.equal(response.status, 200);
+
+  const cookies = getSetCookies(response);
+  const sessionCookie = cookies.find((entry) => entry.startsWith('foundu_session='));
+  assert.ok(sessionCookie, 'session cookie should be set');
+  assert.match(sessionCookie, /SameSite=Lax/);
+  assert.doesNotMatch(sessionCookie, /SameSite=None/);
+});
+
+test('cross-origin https login gets SameSite=None; Secure cookies', { skip: !ENABLE_GOOGLE_BYPASS_TESTS }, async () => {
+  const response = await fetch(`${BASE_URL}/api/auth/google`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Origin: 'https://nurtha.example',
+      'X-Forwarded-Proto': 'https',
+      'X-Forwarded-Host': 'api.nurtha.example'
+    },
+    body: JSON.stringify({ credential: 'test:athrun.sison7@gmail.com' })
+  });
+  assert.equal(response.status, 200);
+
+  const cookies = getSetCookies(response);
+  const sessionCookie = cookies.find((entry) => entry.startsWith('foundu_session='));
+  assert.ok(sessionCookie, 'session cookie should be set');
+  assert.match(sessionCookie, /SameSite=None/);
+  assert.match(sessionCookie, /Secure/);
+
+  const csrfCookie = cookies.find((entry) => entry.startsWith('foundu_csrf='));
+  assert.ok(csrfCookie, 'csrf cookie should be set');
+  assert.match(csrfCookie, /SameSite=None/);
+  assert.match(csrfCookie, /Secure/);
+});
+
+test('csrf token endpoint issues cookie matching its session context', async () => {
+  const response = await fetch(`${BASE_URL}/api/csrf-token`);
+  assert.equal(response.status, 200);
+
+  const payload = await response.json();
+  assert.ok(payload.token, 'csrf token should be returned');
+});

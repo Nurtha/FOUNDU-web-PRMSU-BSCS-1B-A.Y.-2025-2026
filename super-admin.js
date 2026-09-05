@@ -1,5 +1,6 @@
 let API_BASE = '';
 let CSRF_TOKEN = '';
+const API_BASE_STORAGE_KEY = 'founduApiBase';
 
 function normalizeEmails(text) {
   return [...new Set(
@@ -19,11 +20,14 @@ function setMessage(text, isError = false) {
 function getApiCandidates() {
   const protocol = window.location.protocol === 'https:' ? 'https:' : 'http:';
   const host = window.location.hostname;
+  const savedBase = (localStorage.getItem(API_BASE_STORAGE_KEY) || '').trim();
+  const urlParams = new URLSearchParams(window.location.search);
+  const urlBase = (urlParams.get('apiBase') || urlParams.get('api') || '').trim().replace(/\/$/, '');
   const sameOriginBase = window.location.origin || '';
   const isLocalPage = host === 'localhost' || host === '127.0.0.1';
   const candidates = isLocalPage
-    ? [sameOriginBase, `${protocol}//${host}:3000`, 'http://127.0.0.1:3000', 'http://localhost:3000', '']
-    : [sameOriginBase, ''];
+    ? [urlBase, savedBase, sameOriginBase, `${protocol}//${host}:3000`, 'http://127.0.0.1:3000', 'http://localhost:3000']
+    : [urlBase, savedBase, sameOriginBase];
 
   if (host) {
     candidates.push(`${protocol}//${host}:3000`);
@@ -38,6 +42,7 @@ async function resolveApiBase() {
       const health = await fetch(`${base}/api/health`, { credentials: 'include' });
       if (health.ok) {
         API_BASE = base;
+        localStorage.setItem(API_BASE_STORAGE_KEY, base);
         return;
       }
     } catch (_) {

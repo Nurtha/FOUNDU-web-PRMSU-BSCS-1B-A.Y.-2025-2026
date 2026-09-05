@@ -7,6 +7,45 @@ const hpp = require('hpp');
 const rateLimit = require('express-rate-limit');
 const { OAuth2Client } = require('google-auth-library');
 
+// Minimal .env loader so `npm run start` picks up the same file Start.sh uses.
+// Values already present in the real environment always win.
+(function loadDotEnvFile() {
+  try {
+    const envPath = path.join(__dirname, '.env');
+    if (!fs.existsSync(envPath)) {
+      return;
+    }
+
+    const lines = fs.readFileSync(envPath, 'utf8').split(/\r?\n/);
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) {
+        continue;
+      }
+
+      const separator = trimmed.indexOf('=');
+      if (separator === -1) {
+        continue;
+      }
+
+      const key = trimmed.slice(0, separator).trim();
+      let value = trimmed.slice(separator + 1).trim();
+      if (
+        (value.startsWith('"') && value.endsWith('"')) ||
+        (value.startsWith("'") && value.endsWith("'"))
+      ) {
+        value = value.slice(1, -1);
+      }
+
+      if (key && process.env[key] === undefined) {
+        process.env[key] = value;
+      }
+    }
+  } catch (error) {
+    console.warn('[startup] Could not read .env file:', error.message);
+  }
+})();
+
 const app = express();
 const port = 3000;
 const isProduction = process.env.NODE_ENV === 'production';
@@ -20,10 +59,34 @@ const sessionSecret = (process.env.SESSION_SECRET || '').trim();
 const sessionDurationMs = 8 * 60 * 60 * 1000;
 const sessionCookieName = 'foundu_session';
 const sessions = new Map();
+
+// Sweep expired sessions so the in-memory store cannot grow forever.
+setInterval(() => {
+  const now = Date.now();
+  for (const [token, session] of sessions) {
+    if (!session || session.expiresAt <= now) {
+      sessions.delete(token);
+    }
+  }
+}, 30 * 60 * 1000).unref();
 const oauthClient = googleClientId ? new OAuth2Client(googleClientId) : null;
 const adminAllowlistPath = path.join(__dirname, 'admin-allowlist.json');
 
 console.log('[startup] Initializing server...');
+
+if (!googleClientId) {
+  console.warn(
+    '[auth] GOOGLE_CLIENT_ID is not set. Google sign-in is DISABLED until you add it to .env (or your environment).'
+  );
+}
+if (!sessionSecret) {
+  console.warn('[auth] SESSION_SECRET is not set. Consider adding a random value to .env for stronger sessions.');
+}
+if (isProduction && corsAllowlist.length === 0) {
+  console.warn(
+    '[auth] NODE_ENV=production but CORS_ORIGINS is empty. Browser pages served from other origins will be rejected. Set CORS_ORIGINS=https://your-frontend-origin (comma separated).'
+  );
+}
 
 const allowedItemTypes = new Set(['lost', 'found']);
 const allowedCategories = new Set(['electronics', 'pets', 'keys', 'other']);
@@ -569,28 +632,59 @@ function createSessionToken() {
   return crypto.randomBytes(32).toString('hex');
 }
 
-function issueSessionCookie(res, token) {
+function getRequestCookieAttributes(req) {
+  const forwardedProto = (req.get('x-forwarded-proto') || '').split(',')[0].trim().toLowerCase();
+  const isSecureRequest = req.secure || forwardedProto === 'https';
+  const secure = isSecureRequest || isProduction;
+
+  // Cookies must be SameSite=None (plus Secure) to survive cross-site
+  // fetches with credentials, e.g. a frontend on GitHub Pages talking to an
+  // API on another domain. Otherwise Lax is enough and safer.
+  let crossSite = false;
+  const originHeader = (req.get('Origin') || '').trim();
+  const hostHeader = (req.get('x-forwarded-host') || req.get('Host') || '').split(',')[0].trim().toLowerCase();
+  if (originHeader && hostHeader) {
+    try {
+      const originHostname = new URL(originHeader).hostname.toLowerCase();
+      const requestHostname = hostHeader.split(':')[0];
+      crossSite = Boolean(originHostname) && originHostname !== requestHostname;
+    } catch (_) {
+      crossSite = false;
+    }
+  }
+
+  const sameSite = crossSite && secure ? 'None' : 'Lax';
+  return { secure, sameSite };
+}
+
+function appendCookie(req, res, cookieParts) {
+  res.append('Set-Cookie', cookieParts.join('; '));
+}
+
+function issueSessionCookie(req, res, token) {
+  const { secure, sameSite } = getRequestCookieAttributes(req);
   const cookieParts = [
     `${sessionCookieName}=${encodeURIComponent(token)}`,
     'Path=/',
     'HttpOnly',
-    'SameSite=Lax',
+    `SameSite=${sameSite}`,
     `Max-Age=${Math.floor(sessionDurationMs / 1000)}`,
-    isProduction ? 'Secure' : ''
+    secure ? 'Secure' : ''
   ].filter(Boolean);
-  res.append('Set-Cookie', cookieParts.join('; '));
+  appendCookie(req, res, cookieParts);
 }
 
-function clearSessionCookie(res) {
+function clearSessionCookie(req, res) {
+  const { secure, sameSite } = getRequestCookieAttributes(req);
   const cookieParts = [
     `${sessionCookieName}=`,
     'Path=/',
     'HttpOnly',
-    'SameSite=Lax',
+    `SameSite=${sameSite}`,
     'Max-Age=0',
-    isProduction ? 'Secure' : ''
+    secure ? 'Secure' : ''
   ].filter(Boolean);
-  res.append('Set-Cookie', cookieParts.join('; '));
+  appendCookie(req, res, cookieParts);
 }
 
 function isValidEmailAddress(value) {
@@ -718,13 +812,18 @@ function buildAuthPayload(session) {
   };
 }
 
-function issueCsrfToken(res) {
+function issueCsrfToken(req, res) {
+  const { secure, sameSite } = getRequestCookieAttributes(req);
   const token = crypto.randomBytes(32).toString('hex');
   const cookieParts = [
     `foundu_csrf=${encodeURIComponent(token)}`,
     'Path=/',
-    'SameSite=Strict',
-    isProduction ? 'Secure' : ''
+    // SameSite must match the session cookie so the token is actually sent
+    // back on cross-site writes. CSRF protection still holds because the
+    // token must also be echoed in the X-CSRF-Token header, which a
+    // cross-site attacker cannot read.
+    `SameSite=${sameSite === 'None' ? 'None' : 'Strict'}`,
+    secure ? 'Secure' : ''
   ].filter(Boolean);
 
   res.append('Set-Cookie', cookieParts.join('; '));
@@ -1297,8 +1396,8 @@ app.post('/api/auth/google', writeLimiter, async (req, res) => {
       isSuperAdmin,
       expiresAt: Date.now() + sessionDurationMs
     });
-    issueSessionCookie(res, token);
-    const csrfToken = issueCsrfToken(res);
+    issueSessionCookie(req, res, token);
+    const csrfToken = issueCsrfToken(req, res);
 
     return res.json({
       authenticated: true,
@@ -1318,13 +1417,13 @@ app.post('/api/auth/logout', (req, res) => {
     sessions.delete(token);
   }
 
-  clearSessionCookie(res);
+  clearSessionCookie(req, res);
   res.json({ ok: true });
 });
 
 app.get('/api/csrf-token', (req, res) => {
   const cookies = parseCookies(req.get('Cookie') || '');
-  const token = cookies.foundu_csrf || issueCsrfToken(res);
+  const token = cookies.foundu_csrf || issueCsrfToken(req, res);
   res.json({ token });
 });
 
