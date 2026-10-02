@@ -910,7 +910,7 @@ const sendNotFound = (res) =>
 const BLOCKED = /^\/(script\.js|package(-lock)?\.json|admin-allowlist\.json|start\.sh|\.env.*|\.git.*|\.fuse_hidden.*|.*\.(db|db-shm|db-wal|sqbpro)|[ab]\.txt|node_modules|scripts|tests|\.vscode)(\/|$)/i;
 
 app.use((req, res, next) => {
-  if (BLOCKED.test(decodeURIComponent(req.path))) return res.status(404).send('Not found');
+  if (BLOCKED.test(decodeURIComponent(req.path))) return sendNotFound(res);
   next();
 });
 
@@ -3126,6 +3126,11 @@ app.get('/', (req, res) => {
 });
 
 if (require.main === module) {
+app.use((req, res) => {
+  if (req.path.startsWith("/api/")) return res.status(404).json({ error: "Not found" });
+  sendNotFound(res);
+});
+
   app.listen(port, () => {
     console.log(`[server] Running at http://localhost:${port}`);
   });
