@@ -903,6 +903,33 @@ app.use(
 );
 app.use(hpp());
 app.use(express.json({ limit: '8mb' }));
+
+const sendNotFound = (res) =>
+  res.status(404).sendFile(path.join(__dirname, '404.html'));
+
+const BLOCKED = /^\/(script\.js|package(-lock)?\.json|admin-allowlist\.json|start\.sh|\.env.*|\.git.*|\.fuse_hidden.*|.*\.(db|db-shm|db-wal|sqbpro)|[ab]\.txt|node_modules|scripts|tests|\.vscode)(\/|$)/i;
+
+app.use((req, res, next) => {
+  if (BLOCKED.test(decodeURIComponent(req.path))) return res.status(404).send('Not found');
+  next();
+});
+
+// only send admin scripts to logged-in admins
+app.use((req, res, next) => {
+  let p;
+  try { p = path.posix.normalize(decodeURIComponent(req.path)); }
+  catch { return res.status(400).send('Bad request'); }
+
+  const session = getSessionFromRequest(req);
+  if (/^\/super-admin\.js\/?$/i.test(p) && !session?.isSuperAdmin) {
+    return sendNotFound(res);
+  }
+  if (/^\/admin\.js\/?$/i.test(p) && !session?.isAdmin) {
+    return sendNotFound(res);
+  }
+  next();
+});
+
 app.use(express.static(__dirname));
 
 const apiLimiter = rateLimit({
