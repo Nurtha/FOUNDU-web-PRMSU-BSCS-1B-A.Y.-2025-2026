@@ -1083,6 +1083,59 @@
       font-weight: 600;
     }
 
+    .samaritan-loading {
+      display: grid;
+      gap: 14px;
+      padding: 0;
+      background: transparent;
+      border: none;
+      box-shadow: none;
+    }
+
+    .samaritan-skeleton-card {
+      display: grid;
+      grid-template-columns: 54px 1fr 90px;
+      gap: 14px;
+      align-items: center;
+      padding: 18px;
+      border-radius: 22px;
+      background: rgba(255, 255, 255, 0.8);
+      border: 1px solid rgba(255, 255, 255, 0.84);
+      box-shadow: 0 20px 44px rgba(27, 49, 112, 0.1);
+    }
+
+    .samaritan-skeleton-rank,
+    .samaritan-skeleton-line,
+    .samaritan-skeleton-count {
+      border-radius: 999px;
+      background: linear-gradient(90deg, rgba(226, 232, 240, 0.6), rgba(241, 245, 249, 0.95), rgba(226, 232, 240, 0.6));
+      background-size: 220% 100%;
+      animation: skeletonPulse 1.4s ease-in-out infinite;
+    }
+
+    .samaritan-skeleton-rank {
+      width: 42px;
+      height: 42px;
+      border-radius: 12px;
+    }
+
+    .samaritan-skeleton-line {
+      height: 12px;
+      margin-bottom: 9px;
+    }
+
+    .samaritan-skeleton-line:last-child {
+      margin-bottom: 0;
+      width: 70%;
+    }
+
+    .samaritan-skeleton-count {
+      width: 72px;
+      height: 34px;
+      justify-self: end;
+      border-radius: 14px;
+    }
+
     @media (max-width: 1024px) {
       .item-card {
         border-radius: 1.35rem;
@@ -1592,7 +1645,32 @@
       </div>
 
       <section id="samaritan-board" class="samaritan-board" aria-live="polite">
-        <div class="samaritan-loading">Loading community champions...</div>
+        <div class="samaritan-loading">
+          <article class="samaritan-skeleton-card" aria-hidden="true">
+            <div class="samaritan-skeleton-rank"></div>
+            <div>
+              <div class="samaritan-skeleton-line"></div>
+              <div class="samaritan-skeleton-line"></div>
+            </div>
+            <div class="samaritan-skeleton-count"></div>
+          </article>
+          <article class="samaritan-skeleton-card" aria-hidden="true">
+            <div class="samaritan-skeleton-rank"></div>
+            <div>
+              <div class="samaritan-skeleton-line"></div>
+              <div class="samaritan-skeleton-line"></div>
+            </div>
+            <div class="samaritan-skeleton-count"></div>
+          </article>
+          <article class="samaritan-skeleton-card" aria-hidden="true">
+            <div class="samaritan-skeleton-rank"></div>
+            <div>
+              <div class="samaritan-skeleton-line"></div>
+              <div class="samaritan-skeleton-line"></div>
+            </div>
+            <div class="samaritan-skeleton-count"></div>
+          </article>
+        </div>
       </section>
     </div>
   </main>
@@ -2350,6 +2428,37 @@
       `).join('');
     }
 
+    function buildSamaritanLoadingSkeleton() {
+      return `
+        <div class="samaritan-loading">
+          <article class="samaritan-skeleton-card" aria-hidden="true">
+            <div class="samaritan-skeleton-rank"></div>
+            <div>
+              <div class="samaritan-skeleton-line"></div>
+              <div class="samaritan-skeleton-line"></div>
+            </div>
+            <div class="samaritan-skeleton-count"></div>
+          </article>
+          <article class="samaritan-skeleton-card" aria-hidden="true">
+            <div class="samaritan-skeleton-rank"></div>
+            <div>
+              <div class="samaritan-skeleton-line"></div>
+              <div class="samaritan-skeleton-line"></div>
+            </div>
+            <div class="samaritan-skeleton-count"></div>
+          </article>
+          <article class="samaritan-skeleton-card" aria-hidden="true">
+            <div class="samaritan-skeleton-rank"></div>
+            <div>
+              <div class="samaritan-skeleton-line"></div>
+              <div class="samaritan-skeleton-line"></div>
+            </div>
+            <div class="samaritan-skeleton-count"></div>
+          </article>
+        </div>
+      `;
+    }
+
     async function loadGoodSamaritanBoard() {
       const board = document.getElementById('samaritan-board');
       const count = document.getElementById('leaderboard-count');
@@ -2357,7 +2466,7 @@
         return;
       }
 
-      board.innerHTML = '<div class="samaritan-loading">Loading community champions...</div>';
+      board.innerHTML = buildSamaritanLoadingSkeleton();
 
       try {
         const response = await apiFetch('/api/good-samaritans');
